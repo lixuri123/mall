@@ -24,6 +24,8 @@ services:
     volumes:
       - mall_redis_74:/data
 
+  # A 阶段使用；B 阶段改用 RocketMQ 后保留定义以便回退/对比，默认不再随全量 up 启动。
+  # 如需对比：docker compose -p mall-local -f document/docker/docker-compose-local.yml up -d rabbitmq
   rabbitmq:
     image: rabbitmq:4.2.9-management
     environment:
@@ -35,6 +37,32 @@ services:
       - "15672:15672"
     volumes:
       - mall_rabbitmq_42:/var/lib/rabbitmq
+
+  # B 阶段：订单超时取消消息改由 RocketMQ 普通消息承载。
+  # 到期判断仍在本地消息表，不用 Broker 延迟消息；重试才使用固定短延迟级别。
+  # 只启 NameServer + Broker（Remoting 协议），不需要 gRPC Proxy。
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.2
+    command: sh mqnamesrv
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "9876:9876"
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.2
+    command: sh mqbroker -c /home/rocketmq/rocketmq-5.3.2/conf/broker.conf
+    environment:
+      TZ: Asia/Shanghai
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+      - "10912:10912"
+    volumes:
+      - ./rocketmq-broker.conf:/home/rocketmq/rocketmq-5.3.2/conf/broker.conf:ro
+    depends_on:
+      - rocketmq-namesrv
 
   mongo:
     image: mongo:8.0.16

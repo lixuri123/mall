@@ -216,14 +216,20 @@ mall
   说明 [document/order-consistency/README.md](./document/order-consistency/README.md)、
   报告 [TEST_REPORT.md](./document/order-consistency/TEST_REPORT.md)。
 - **B：超时订单取消的消息可靠性** — 固定 `oms_order.expire_time` + 本地消息表（Outbox），
-  下单事务内写 `PENDING` 消息、到期租约派发、Publisher Confirm / mandatory Return、
-  手动 ACK / 固定 TTL 重试 / 死信队列、双层定时兜底与指标告警；
-  在 `mall-local` 容器的真实 MySQL 8.4.7 + RabbitMQ 4.2.9 上完成故障注入测试。
-  说明 [document/order-consistency/B_README.md](./document/order-consistency/B_README.md)、
-  报告 [B_TEST_REPORT.md](./document/order-consistency/B_TEST_REPORT.md)、
-  原始输出 [results/](./document/order-consistency/results/)。
+  下单事务内写 `PENDING` 消息、到期租约派发、发布确认 / 不可路由处理、
+  提交后确认 / 固定延迟重试 / 死信队列、双层定时兜底与指标告警。
+- **B-MQ：消息队列从 RabbitMQ 切换到 RocketMQ 5.3.2** — 采用「换 MQ 不换架构」：
+  保留本地消息表、租约 CAS、消费幂等、提交后确认、双层兜底五层，只重写收发适配层。
+  在 `mall-local` 容器的真实 MySQL 8.4.7 + RocketMQ 5.3.2 上完成故障注入测试。
+  说明 [B_ROCKETMQ.md](./document/order-consistency/B_ROCKETMQ.md)、
+  报告 [B_ROCKETMQ_TEST_REPORT.md](./document/order-consistency/B_ROCKETMQ_TEST_REPORT.md)、
+  原始输出 [results/b-rocketmq-test-run-2026-11-12.txt](./document/order-consistency/results/b-rocketmq-test-run-2026-11-12.txt)。
+  RabbitMQ 版说明与报告作为历史快照保留在 [B_README.md](./document/order-consistency/B_README.md)、
+  [B_TEST_REPORT.md](./document/order-consistency/B_TEST_REPORT.md)。
 
-全量结果：56 个集成/单元测试 0 失败 / 0 错误 / 0 跳过，8 个模块编译通过。
+全量结果：**56 个集成/单元测试 0 失败 / 0 错误 / 0 跳过，连续三次复跑全绿**，8 个模块编译通过。
+订单超时判定始终以数据库 `expire_time` 为权威，不使用 MQ 延迟消息；RocketMQ 的固定延迟级别
+只用于消费失败后的受控重试。
 
 已有库升级顺序（**先备份，预检只读，人工确认后再迁移**）：
 
@@ -231,7 +237,9 @@ mall
 2. [B 预检](./document/sql/mall_b_precheck.sql) → [B 迁移](./document/sql/mall_b_migration.sql)
 
 新环境直接导入 [document/sql/mall.sql](./document/sql/mall.sql)（已内置 A+B 全部结构）。
-本地中间件用 `docker compose -p mall-local -f document/docker/docker-compose-local.yml up -d`，
+本地中间件用 `docker compose -p mall-local -f document/docker/docker-compose-local.yml up -d`。
+订单取消消息走 RocketMQ，需先启动 `rocketmq-namesrv` / `rocketmq-broker` 并预建 3 个 topic
+（Broker 关闭了自动建 topic，命令见 [B_ROCKETMQ.md](./document/order-consistency/B_ROCKETMQ.md) 第 5、8 节）。
 MySQL 必须保持 `+08:00` 时区，说明见 [document/docker/LOCAL.md](./document/docker/LOCAL.md)。
 
 ## 许可证

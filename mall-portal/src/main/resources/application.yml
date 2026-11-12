@@ -68,12 +68,6 @@ mongo:
   insert:
     sqlEnable: true # 用于控制是否通过数据库数据来插入mongo
 
-# 消息队列定义
-rabbitmq:
-  queue:
-    name:
-      cancelOrder: cancelOrderQueue
-
 # A 阶段：订单状态与库存一致性
 mall:
   order:
@@ -84,10 +78,15 @@ mall:
       enabled: true
       initial-delay-ms: 30000
       interval-ms: 60000
-    # B 阶段：本地消息表 + 到期投递 + Publisher Confirm/Return + 受控消费重试
+    # B 阶段：本地消息表 + 到期投递 + 同步发送确认 + 受控消费重试。
+    # MQ 已从 RabbitMQ 换成 RocketMQ 5.3.2；订单到期判断仍在数据库，不用 Broker 延迟消息。
     outbox:
-      exchange: mall.order.direct
-      routing-key: mall.order.cancel
+      name-server: 127.0.0.1:9876
+      topic: mall_order_cancel
+      dlq-topic: mall_order_cancel_dlq
+      retry-topic: mall_order_cancel_retry
+      producer-group: mall-order-cancel-producer
+      consumer-group: mall-order-cancel-consumer
       admin-enabled: false
       dispatch:
         enabled: true
@@ -100,9 +99,11 @@ mall:
         retry-base-seconds: 5
         retry-max-seconds: 300
       consume:
+        enabled: true
         max-retry: 3
-        # 固定 TTL（所有重试消息延迟相同，无队头阻塞）；测试也使用同一数值，避免队列重声明冲突
-        retry-ttl-ms: 1000
+        # RocketMQ 固定延迟级别：2 = 5s。所有重试消息延迟相同，不产生队头阻塞。
+        # 用于消费失败的短周期重试，不用于订单超时判定。
+        retry-delay-level: 2
       metrics:
         enabled: true
         interval-ms: 60000

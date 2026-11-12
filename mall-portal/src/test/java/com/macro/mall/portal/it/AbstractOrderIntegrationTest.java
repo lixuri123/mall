@@ -34,14 +34,12 @@ import java.util.UUID;
  * 直接相关。测试库为独立的 mall_it（由 document/sql/mall.sql 导入并执行
  * document/sql/mall_a_migration.sql），不触碰本机业务数据。</p>
  *
- * <p>RabbitMQ 监听容器与超时扫描定时任务在测试中关闭，避免后台任务干扰断言。</p>
+ * <p>RocketMQ 消费者与超时扫描定时任务在测试中关闭，避免后台任务干扰断言。</p>
  */
 @SpringBootTest(classes = MallPortalApplication.class, properties = {
         "spring.datasource.url=jdbc:mysql://127.0.0.1:3307/mall_it?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true",
         "spring.datasource.username=root",
         "spring.datasource.password=root",
-        "spring.rabbitmq.listener.simple.auto-startup=false",
-        "spring.rabbitmq.listener.direct.auto-startup=false",
         "mall.order.timeout-scan.enabled=false",
         "mall.order.outbox.dispatch.enabled=false",
         "mall.order.outbox.consume.enabled=false",

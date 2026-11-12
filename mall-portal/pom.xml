@@ -36,10 +36,21 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
-        <!--集成消息队列-->
+        <!--集成消息队列：RocketMQ 原生 Remoting 客户端。
+            刻意不用 rocketmq-spring-boot-starter：它是为 Spring Boot 2.x/javax 设计的，
+            与本项目 Spring Boot 3.5 的 jakarta 命名空间存在版本分歧。
+            原生客户端是纯 Java SDK、不依赖 Spring，自己封一层 Bean 即可完全规避。-->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-amqp</artifactId>
+            <groupId>org.apache.rocketmq</groupId>
+            <artifactId>rocketmq-client</artifactId>
+            <version>5.3.2</version>
+        </dependency>
+        <!--仅测试用：查询 topic 堆积、重置消费位点，替代原来的 queueDepth/purgeQueues。-->
+        <dependency>
+            <groupId>org.apache.rocketmq</groupId>
+            <artifactId>rocketmq-tools</artifactId>
+            <version>5.3.2</version>
+            <scope>test</scope>
         </dependency>
         <!--支付宝支付Java SDK-->
         <dependency>

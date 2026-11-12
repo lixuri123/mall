@@ -51,18 +51,12 @@ import static org.mockito.Mockito.when;
  *
  * <p>用可切换的 {@code @Primary} 发布器模拟 MQ 不可用、NACK、不可路由、Confirm 超时，
  * 验证状态流转与「至少一次投递」语义；真实 RabbitMQ 链路在
- * {@link OrderMessageEndToEndRabbitTest} 中验证。</p>
+ * {@link OrderMessageEndToEndRocketMqTest} 中验证。</p>
  */
 @SpringBootTest(classes = MallPortalApplication.class, properties = {
         "spring.datasource.url=jdbc:mysql://127.0.0.1:3307/mall_it_b?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true",
         "spring.datasource.username=root",
         "spring.datasource.password=root",
-        "spring.rabbitmq.listener.simple.auto-startup=false",
-        "spring.rabbitmq.listener.direct.auto-startup=false",
-        "spring.rabbitmq.listener.simple.acknowledge-mode=manual",
-        "spring.rabbitmq.publisher-confirm-type=correlated",
-        "spring.rabbitmq.connection-timeout=2000",
-        "spring.rabbitmq.publisher-returns=true",
         "mall.order.outbox.dispatch.enabled=true",
         "mall.order.outbox.dispatch.initial-delay-ms=3600000",
         "mall.order.outbox.dispatch.interval-ms=3600000",
@@ -211,7 +205,7 @@ class OrderMessageDispatchTest extends AbstractOrderMessageIntegrationTest {
         execute("UPDATE oms_order_message SET due_time = DATE_SUB(NOW(), INTERVAL 1 MINUTE), "
                 + "next_retry_time = DATE_SUB(NOW(), INTERVAL 1 MINUTE)");
 
-        fault.networkFailure = new IllegalStateException("simulated RabbitMQ connection refused");
+        fault.networkFailure = new IllegalStateException("simulated RocketMQ broker unavailable");
         assertEquals(0, dispatcher.dispatchOnce());
         assertEquals(0, statusOf(orderId), "MQ 不可用不能影响已创建的订单（仍为待付款）");
         assertEquals(1, queryInt("SELECT COUNT(*) FROM oms_order WHERE member_username = 'it-test'"));

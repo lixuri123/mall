@@ -1,4 +1,7 @@
-B 阶段全量测试原始输出（2026-11-12 12:42:47 +08:00，mall-local 容器）
+【历史快照】B 阶段 RabbitMQ 4.2.9 版全量测试原始输出
+当前代码已切换到 RocketMQ 5.3.2，最新结果见 b-rocketmq-test-run-2026-11-12.txt
+
+采集时间：2026-11-12 12:42:47 +08:00（mall-local 容器）
 来源日志：/tmp/b-full-test.log（Maven 全量输出，121 KB）
 命令：mvn.cmd -B -pl mall-portal -am -DskipTests=false -Dsurefire.failIfNoSpecifiedTests=false -Ddocker.skip=true test
 

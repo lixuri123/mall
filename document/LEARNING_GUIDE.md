@@ -1,7 +1,14 @@
 # mall 项目学习路线与项目经历指南
 
 > 适用对象：有 Java / Spring Boot 基础，想通过本项目形成一段可写进简历的项目经历。
-> 本指南基于当前工作区源码（Spring Boot 3.5.14 + JDK 17）撰写，所有文件路径均已在本地核实。
+> 本指南基于**上游原始 mall 源码**撰写，描述的是改造前的实现。
+>
+> **⚠️ 本工作区已完成 A / B / MQ 替换三阶段改造，下文多处内容已过时**：
+> `QueueEnum` / `RabbitMqConfig` / `CancelOrderSender` 的 TTL 延迟队列、`@RabbitListener`、
+> `normal_order_ovetime` 驱动超时等均已不存在；当前订单链路与类名以
+> [order-consistency/B_ROCKETMQ.md](order-consistency/B_ROCKETMQ.md) 与
+> [根 README 的「本地改造记录」](../README.md) 为准。
+> 本指南保留作为「读原始项目、对照改造前后差异」的参考。
 
 ---
 

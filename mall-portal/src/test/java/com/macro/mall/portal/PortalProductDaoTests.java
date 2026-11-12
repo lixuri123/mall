@@ -20,8 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
         "mall.order.outbox.dispatch.enabled=false",
         "mall.order.outbox.consume.enabled=false",
         "mall.order.outbox.metrics.enabled=false",
-        "spring.rabbitmq.listener.simple.auto-startup=false",
-        "spring.rabbitmq.listener.direct.auto-startup=false"
 })
 public class PortalProductDaoTests {
     @Autowired

@@ -1,6 +1,11 @@
-# B 阶段测试与验收报告
+# B 阶段测试与验收报告（RabbitMQ 版 · 历史快照）
 
-> 全部数据来自 2026-11-12 在用户指定的 `mall-local` Docker 容器内**真实 MySQL 8.4.7 +
+> **⚠️ 本文是 RabbitMQ 4.2.9 实现的历史验收报告，不是当前代码的验收结论。**
+> 当前代码使用 RocketMQ 5.3.2，最新全量结果见
+> [B_ROCKETMQ_TEST_REPORT.md](B_ROCKETMQ_TEST_REPORT.md) 与
+> [results/b-rocketmq-test-run-2026-11-12.txt](results/b-rocketmq-test-run-2026-11-12.txt)。
+>
+> 以下全部数据来自 2026-11-12 在用户指定的 `mall-local` Docker 容器内**真实 MySQL 8.4.7 +
 > 真实 RabbitMQ 4.2.9** 上的实际执行，不含估算值。
 > 原始输出见 [results/b-test-run-2026-11-12.txt](results/b-test-run-2026-11-12.txt)，
 > 改造说明见 [B_README.md](B_README.md)，A 阶段报告见 [TEST_REPORT.md](TEST_REPORT.md)。

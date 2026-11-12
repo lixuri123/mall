@@ -6,9 +6,11 @@
 > - 改造前基线：[BASELINE.md](BASELINE.md)
 > - 测试报告与实测数据：[TEST_REPORT.md](TEST_REPORT.md)
 > - 原始输出：[results/](results/)
-> - **后续阶段 B（消息可靠性）已实施**：[B_README.md](B_README.md) / [B_TEST_REPORT.md](B_TEST_REPORT.md)
+> - **后续阶段 B（消息可靠性）已实施，当前 MQ 为 RocketMQ 5.3.2**：
+>   [B_ROCKETMQ.md](B_ROCKETMQ.md) / [B_ROCKETMQ_TEST_REPORT.md](B_ROCKETMQ_TEST_REPORT.md)；
+>   RabbitMQ 版历史快照：[B_README.md](B_README.md) / [B_TEST_REPORT.md](B_TEST_REPORT.md)
 >
-> **状态：A 阶段代码与测试已完成并实际跑通；尚未提交 Git。本文描述的是 A 阶段当时的范围，
+> **状态：A 阶段代码与测试已完成并实际跑通，已提交（`73b273c`）。本文描述的是 A 阶段当时的范围，
 > 其中「属于 B、本次未实现」的表述是 A 的边界快照，不代表当前工作区仍未实现。
 > 所有结论以实际完成的范围为准。**
 
@@ -131,7 +133,7 @@ MQ 完全不可用             → 消息发送失败只告警，订单照常提
 开关 `mall.order.timeout-scan.enabled`（默认 true），首次延迟默认 30s。
 失败订单保持 `status=0` 并输出 ERROR 级告警。
 **发送端 Confirm / 本地消息表 / 消费失败重试属于 B，A 阶段未实现；
-B 阶段已在当前工作区补齐，见 [B_README.md](B_README.md)。**
+B 阶段已在当前工作区补齐，见 [B_ROCKETMQ.md](B_ROCKETMQ.md)。**
 
 ## 4. 历史数据处理
 
@@ -155,7 +157,7 @@ B 阶段已在当前工作区补齐，见 [B_README.md](B_README.md)。**
 | 4 支付条件流转与扣减 | 完成 | 状态机 + 支付宝回调核对 + 重复通知/回滚测试 |
 | 5 统一取消逻辑 | 完成 | 用户/系统双入口 + 归属/超时校验 + 重复取消/竞争测试 |
 | 6 积分、券、支付晚到 | 完成（留痕，不含自动退款） | 原子增减、`use_integration` 持久化修复、`oms_order_pay_anomaly` |
-| 7 超时补偿并对接 B | 完成 A 的兜底部分 | `afterCommit` 发送、定时扫描、消费者幂等；B 已独立实施，见 [B_README.md](B_README.md) |
+| 7 超时补偿并对接 B | 完成 A 的兜底部分 | `afterCommit` 发送、定时扫描、消费者幂等；B 已独立实施并改为本地消息表，见 [B_ROCKETMQ.md](B_ROCKETMQ.md) |
 | 8 重复执行测试并保存数据 | 完成 | 32 个测试全绿，`results/` 与 `TEST_REPORT.md` |
 
 ## 6. 明确没做的事（不要写进简历）
@@ -165,7 +167,7 @@ B 阶段已在当前工作区补齐，见 [B_README.md](B_README.md)。**
   需要请求幂等键 + 数据库唯一约束，属于 A 的补充任务。
 - 没有实现自动关单、对账、退款；支付晚到只做到「识别 + 独立事务留痕 + 告警」。
 - 没有持久化第三方交易号，重复通知按商户订单号 + 金额 + 状态判幂等。
-- 没有发送端 Confirm、本地消息表、消费失败重试（属 B 阶段范围，已在当前工作区补齐，见 [B_README.md](B_README.md)）。
+- 没有发送端确认、本地消息表、消费失败重试（属 B 阶段范围，已在当前工作区补齐，见 [B_ROCKETMQ.md](B_ROCKETMQ.md)）。
 - 没有压测/QPS 结论；报告里的耗时只是本机单次执行耗时。
 
 ## 7. 可以写进简历的结论（仅覆盖实测范围）

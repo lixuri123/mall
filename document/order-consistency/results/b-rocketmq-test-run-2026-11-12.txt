@@ -1,0 +1,102 @@
+B 阶段（RocketMQ 版）全量测试原始输出摘录
+================================================================
+采集时间：2026-11-12 16:52:40 +08:00（交付前最终回归）
+来源日志：/tmp/b-rocketmq-delivery.log（最后一次全量，对应最终交付代码）
+辅助日志：/tmp/b-rocketmq-final6.log、/tmp/b-rocketmq-final5.log（此前两次全量，同样全绿）
+          /tmp/it-e2e5.log（端到端类单独跑，9/9 通过）
+          /tmp/b-rocketmq-compile.log（8 模块全量编译）
+命令：mvn.cmd -B -pl mall-portal -am -DskipTests=false \
+      -Dsurefire.failIfNoSpecifiedTests=false -Ddocker.skip=true test
+      （mvn.cmd 绝对路径 D:\Tools\apache-maven-3.9.9\bin\mvn.cmd）
+
+最后一次源码/配置修改：2026-11-12 16:36:16（测试类）与
+application-prod.yml（RocketMQ name-server 覆盖），均早于本次测试日志时间；
+本次测试之后只新增/更新交付文档。即日志对应当前交付状态。
+连续三次全量复跑均为 56/56 全绿。
+
+== 环境（实测采集，非估算） ==
+docker compose -p mall-local -f document/docker/docker-compose-local.yml
+  mall-local-mysql-1              Up   mysql:8.4.7
+  mall-local-rocketmq-namesrv-1   Up   apache/rocketmq:5.3.2
+  mall-local-rocketmq-broker-1    Up   apache/rocketmq:5.3.2
+  mall-local-rabbitmq-1           Up   rabbitmq:4.2.9-management（保留容器，当前代码不再使用）
+  mall-local-redis-1 / mall-local-mongo-1   Up
+
+MySQL:
+  SELECT VERSION(), @@transaction_isolation, @@global.time_zone,
+         @@session.time_zone, NOW();
+  8.4.7 | REPEATABLE-READ | +08:00 | +08:00 | 2026-11-12 16:43:44
+
+RocketMQ (mqadmin clusterList):
+  DefaultCluster  broker-a  0  127.0.0.1:10911  V5_3_2  ... ACTIVATED=true
+
+RocketMQ (mqadmin getBrokerConfig -b 127.0.0.1:10911):
+  brokerIP1             = 127.0.0.1
+  flushDiskType          = SYNC_FLUSH
+  autoCreateTopicEnable  = false
+
+预建 topic（关闭自动建 topic 是 UNROUTABLE 故障分支的前提）：
+  mall_order_cancel / mall_order_cancel_retry / mall_order_cancel_dlq  (各 4 读 4 写)
+
+构建：Apache Maven 3.9.9 / Spring Boot 3.5.14 / JDK 17
+JDBC：jdbc:mysql://127.0.0.1:3307/...&serverTimezone=Asia/Shanghai
+测试库：mall_it（A 回归）、mall_it_b（B 阶段，隔离）
+
+== 结构化输出（System.out 标记，ASCII 原文） ==
+[GENERATE_ORDER] stock=10, threads=20, qty=1, successOrders=10, rejected=10, errors=0, dbOrders=10, finalStock=10, finalLock=10, elapsedMs=409
+[IT-BROKER-RESET] 已重建测试 topic 与订阅组：it-order-cancel-consumer
+[B-MQ-OUTAGE] orderId=430, eventId=OTC-430, duringStatus=PENDING, retryCount=1, afterStatus=SENT, publishCalls=2
+[B-POISON] dlqDepth=1, mainDiff=0, retryDiff=0, failureRows=1
+[B-DUPLICATE] orderId=436, deliveries=3, finalStatus=4, stock=10, lock=0, consumeFailures=0
+[B-REAL-OUTAGE] orderId=439, eventId=OTC-439, finalStatus=4, stock=10, lock=0, messageStatus=SENT, retryCount=1, dlqDepth=0, consumeFailures=0, viaMessage=true, scanFallback=false
+[RACE] rounds=20, paidWins=6, cancelWins=14
+[CONCURRENT] stock=10, threads=30, qty=1, success=10, errors=0, finalLock=10, elapsedMs=133
+[B-LEASE] eventId=OTC-446, orderId=446, winner=instance-A, loser=instance-B, attemptVersion=1
+
+注：Maven 控制台为 GBK 编码，[IT-BROKER-RESET] 在原始日志中显示为乱码，
+此处为中文还原文本；其余标记均为 ASCII 原文。
+
+说明：
+  - [B-MQ-OUTAGE] 由 FaultPublisher 注入发送失败，验证 MQ 不可用不影响下单事务。
+  - [B-REAL-OUTAGE] 由测试真实执行 docker compose stop/start rocketmq-broker。
+    最后三次全量复跑均 viaMessage=true（消息链路完成取消）；
+    scanFallback 分支是 Broker 重启后位点重建、消息被跳过时的设计内兜底，
+    已在测试代码中实现，但这两次最终复跑未触发。
+  - [B-LEASE] 是同一 JVM 内两个不同 owner 的租约 CAS 竞争，非多机集群压测。
+  - 管理 API 异常计数（[IT-ADMIN-ERROR]）：0。
+
+== Surefire 汇总（最后一次全量） ==
+[INFO] Tests run: 4,  Failures: 0, Errors: 0, Skipped: 0 -- GenerateOrderConcurrencyTest
+[INFO] Tests run: 7,  Failures: 0, Errors: 0, Skipped: 0 -- OrderMessageDispatchTest
+[INFO] Tests run: 9,  Failures: 0, Errors: 0, Skipped: 0 -- OrderMessageEndToEndRocketMqTest
+[INFO] Tests run: 3,  Failures: 0, Errors: 0, Skipped: 0 -- OrderSkuAggregatorTest
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0 -- OrderStateTransitionServiceTest
+[INFO] Tests run: 4,  Failures: 0, Errors: 0, Skipped: 0 -- OrderTimeOutScanTest
+[INFO] Tests run: 8,  Failures: 0, Errors: 0, Skipped: 0 -- OutboxDaoTest
+[INFO] Tests run: 8,  Failures: 0, Errors: 0, Skipped: 0 -- PortalOrderDaoAtomicSqlTest
+[INFO] Tests run: 1,  Failures: 0, Errors: 0, Skipped: 0 -- MallPortalApplicationTests
+[INFO] Tests run: 1,  Failures: 0, Errors: 0, Skipped: 0 -- PortalProductDaoTests
+[INFO] Tests run: 56, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+
+此前两次全量（/tmp/b-rocketmq-final5.log、/tmp/b-rocketmq-final6.log）同样为：
+  Tests run: 56, Failures: 0, Errors: 0, Skipped: 0 / BUILD SUCCESS
+  [B-REAL-OUTAGE] ... viaMessage=true, scanFallback=false
+
+== 全项目编译（mvn -B -DskipTests -Ddocker.skip=true compile） ==
+mall / mall-common / mall-mbg / mall-security / mall-demo / mall-admin /
+mall-search / mall-portal 全部 SUCCESS
+BUILD SUCCESS
+
+== 迁移复核（真实旧结构开发库 mall，A+B 迁移在上一阶段完成，本次未改 SQL） ==
+mall_a_precheck.sql / mall_b_precheck.sql 通过
+4 条负数 lock_stock（98/102/103/106）人工确认后清零
+mall_a_migration.sql  EXIT=0
+mall_b_migration.sql  EXIT=0
+oms_order_message: PENDING=1
+oms_order_expire_backfill_exception: 0
+待支付订单缺 expire_time: 0
+
+== 代码状态 ==
+A 阶段提交 73b273c / B 阶段（RabbitMQ 版）提交 1f55505 已在仓库中。
+本次「换 MQ 不换架构」改动尚未提交 Git：12 个修改 + 3 个删除 + 4 个新增文件。

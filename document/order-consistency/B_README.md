@@ -1,5 +1,12 @@
-# B：超时订单取消的消息可靠性
+# B：超时订单取消的消息可靠性（RabbitMQ 版 · 历史快照）
 
+> **⚠️ 本文记录的是 B 阶段最初的 RabbitMQ 4.2.9 实现，不是当前代码。**
+> 当前代码已按「换 MQ 不换架构」切换到 **RocketMQ 5.3.2**：
+> 交换机 / 队列 / Publisher Confirm / mandatory Return / 手动 `basicAck` 等描述均已失效。
+> **请以 [B_ROCKETMQ.md](B_ROCKETMQ.md) 与
+> [B_ROCKETMQ_TEST_REPORT.md](B_ROCKETMQ_TEST_REPORT.md) 为准。**
+> 本文保留是为了完整记录架构演进与 RabbitMQ 版的验收证据。
+>
 > 本目录是方案 B 的落地说明与实测证据。A 阶段（订单状态与库存一致性）见  
 > [README.md](README.md) 与 [TEST\_REPORT.md](TEST_REPORT.md)。
 >
@@ -8,8 +15,9 @@
 > - 原始输出：[results/b-test-run-2026-11-12.txt](results/b-test-run-2026-11-12.txt)
 > - 已有库升级：[B 预检](../sql/mall_b_precheck.sql) → [B 迁移](../sql/mall_b_migration.sql)
 >
-> **状态：代码与测试已完成并在 `mall-local` 真实 MySQL 8.4.7 + RabbitMQ 4.2.9 上跑通；尚未提交 Git。  
-> 所有结论以实际完成的范围为准。**
+> **状态（历史）：RabbitMQ 版已在 `mall-local` 真实 MySQL 8.4.7 + RabbitMQ 4.2.9 上跑通，
+> 并已提交（`1f55505 message reliability`）；随后 MQ 被替换为 RocketMQ 5.3.2。
+> 所有结论以当时实际完成的范围为准。**
 
 ---
 

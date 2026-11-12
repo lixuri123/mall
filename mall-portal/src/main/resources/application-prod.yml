@@ -26,12 +26,13 @@ spring:
       port: 6379 # Redis服务器连接端口
       password: # Redis服务器连接密码（默认为空）
       timeout: 300ms # 连接超时时间（毫秒）
-  rabbitmq:
-    host: rabbit
-    port: 5672
-    virtual-host: /mall
-    username: mall
-    password: mall
+
+# 订单取消消息已切换到 RocketMQ；application.yml 的 mall.order.outbox.* 是本地默认值，
+# 这里覆盖为容器网络内的 NameServer 地址（生产部署按实际地址替换）。
+mall:
+  order:
+    outbox:
+      name-server: rocketmq-namesrv:9876
 
 mongo:
   insert:
