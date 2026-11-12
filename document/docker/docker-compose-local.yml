@@ -1,0 +1,61 @@
+name: mall-local
+
+services:
+  mysql:
+    image: mysql:8.4.7
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: mall
+    ports:
+      - "3307:3306"
+    volumes:
+      - mall_mysql_84:/var/lib/mysql
+      - ../sql/mall.sql:/docker-entrypoint-initdb.d/mall.sql:ro
+
+  redis:
+    image: redis:7.4.7
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - mall_redis_74:/data
+
+  rabbitmq:
+    image: rabbitmq:4.2.9-management
+    environment:
+      RABBITMQ_DEFAULT_USER: mall
+      RABBITMQ_DEFAULT_PASS: mall
+      RABBITMQ_DEFAULT_VHOST: /mall
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - mall_rabbitmq_42:/var/lib/rabbitmq
+
+  mongo:
+    image: mongo:8.0.16
+    ports:
+      - "27017:27017"
+    volumes:
+      - mall_mongo_80:/data/db
+
+  elasticsearch:
+    build:
+      context: .
+      dockerfile: Dockerfile.elasticsearch
+    image: mall/elasticsearch-ik:8.18.8
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - mall_elasticsearch_818:/usr/share/elasticsearch/data
+
+volumes:
+  mall_mysql_84:
+  mall_redis_74:
+  mall_rabbitmq_42:
+  mall_mongo_80:
+  mall_elasticsearch_818:

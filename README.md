@@ -207,6 +207,14 @@ mall
 
 ![公众号图片](./document/resource/qrcode_for_macrozheng_258.jpg)
 
+## 本地改造记录
+
+本工作区在源码基础上完成了「订单状态与库存一致性改造」（A 阶段）：MySQL 条件更新防超卖、
+订单状态条件流转、支付/取消幂等、事务边界与超时补偿，并补齐真实 MySQL 集成测试。
+改动清单、边界说明、基线与实测数据见 [document/order-consistency/README.md](./document/order-consistency/README.md)，
+已有库升级前请先执行 [库存数据预检](./document/sql/mall_a_precheck.sql) 与
+[迁移脚本](./document/sql/mall_a_migration.sql)。
+
 ## 许可证
 
 [Apache License 2.0](https://github.com/macrozheng/mall/blob/master/LICENSE)

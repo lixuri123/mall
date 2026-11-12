@@ -1,0 +1,21 @@
+A 阶段全量测试输出（2026-11-12，mall-portal）
+命令: mvn.cmd -B -pl mall-portal -am -DskipTests=false -Dsurefire.failIfNoSpecifiedTests=false -Ddocker.skip=true test
+
+[GENERATE_ORDER] stock=10, threads=20, qty=1, successOrders=10, rejected=10, errors=0, dbOrders=10, finalStock=10, finalLock=10, elapsedMs=184
+[RACE] rounds=20, paidWins=6, cancelWins=14
+[CONCURRENT] stock=10, threads=30, qty=1, success=10, errors=0, finalLock=10, elapsedMs=52
+
+Tests run: 4,  Failures: 0, Errors: 0 -- com.macro.mall.portal.it.GenerateOrderConcurrencyTest
+Tests run: 3,  Failures: 0, Errors: 0 -- com.macro.mall.portal.it.OrderSkuAggregatorTest
+Tests run: 11, Failures: 0, Errors: 0 -- com.macro.mall.portal.it.OrderStateTransitionServiceTest
+Tests run: 4,  Failures: 0, Errors: 0 -- com.macro.mall.portal.it.OrderTimeOutScanTest
+Tests run: 8,  Failures: 0, Errors: 0 -- com.macro.mall.portal.it.PortalOrderDaoAtomicSqlTest
+Tests run: 1,  Failures: 0, Errors: 0 -- com.macro.mall.portal.MallPortalApplicationTests
+Tests run: 1,  Failures: 0, Errors: 0 -- com.macro.mall.portal.PortalProductDaoTests
+Tests run: 32, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+
+注：支付/取消竞争每轮胜者分布随调度变化，多次运行出现过 11:9、10:10、7:13、6:14，
+     但每轮都恰好一个胜者且库存与最终状态一致。
+
+全项目编译：mvn.cmd -B -DskipTests -Ddocker.skip=true compile -> 8 个模块全部 SUCCESS。

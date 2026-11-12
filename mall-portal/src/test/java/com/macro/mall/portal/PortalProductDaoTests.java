@@ -15,7 +15,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * Created by macro on 2018/8/27.
  * 前台商品查询逻辑单元测试
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+        "mall.order.timeout-scan.enabled=false",
+        "spring.rabbitmq.listener.simple.auto-startup=false",
+        "spring.rabbitmq.listener.direct.auto-startup=false"
+})
 public class PortalProductDaoTests {
     @Autowired
     private PortalProductDao portalProductDao;

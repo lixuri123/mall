@@ -486,8 +486,35 @@ CREATE TABLE `oms_order`  (
   `receive_time` datetime NULL DEFAULT NULL COMMENT '确认收货时间',
   `comment_time` datetime NULL DEFAULT NULL COMMENT '评价时间',
   `modify_time` datetime NULL DEFAULT NULL COMMENT '修改时间',
-  PRIMARY KEY (`id`) USING BTREE
+  PRIMARY KEY (`id`) USING BTREE,
+  KEY `idx_order_timeout_scan` (`status`, `delete_status`, `create_time`)
 ) ENGINE = InnoDB AUTO_INCREMENT = 77 CHARACTER SET = utf8 COLLATE = utf8_general_ci COMMENT = '订单表' ROW_FORMAT = DYNAMIC;
+
+-- ----------------------------
+-- Table structure for oms_order_pay_anomaly
+-- A 阶段：支付成功但本地订单状态不匹配（例如订单已取消）时留下可追踪的待对账记录
+-- ----------------------------
+DROP TABLE IF EXISTS `oms_order_pay_anomaly`;
+CREATE TABLE `oms_order_pay_anomaly`  (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `order_id` bigint(20) NOT NULL COMMENT '本地订单ID',
+  `order_sn` varchar(64) NOT NULL DEFAULT '' COMMENT '商户订单号',
+  `member_id` bigint(20) NULL DEFAULT NULL COMMENT '会员ID',
+  `order_status` int(1) NOT NULL COMMENT '收到支付结果时本地订单状态',
+  `pay_amount` decimal(10, 2) NULL DEFAULT NULL COMMENT '本地应付金额',
+  `notify_amount` decimal(10, 2) NULL DEFAULT NULL COMMENT '第三方通知金额',
+  `trade_no` varchar(64) NOT NULL DEFAULT '' COMMENT '第三方交易号',
+  `pay_type` int(1) NULL DEFAULT NULL COMMENT '支付方式',
+  `reason` varchar(255) NOT NULL COMMENT '异常原因',
+  `raw_params` text NULL COMMENT '原始回调参数，便于对账',
+  `handle_status` int(1) NOT NULL DEFAULT 0 COMMENT '0 待处理；1 已退款；2 已人工处理',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录时间',
+  `modify_time` datetime NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE KEY `uk_order_trade` (`order_id`, `trade_no`),
+  KEY `idx_handle_status` (`handle_status`, `create_time`),
+  KEY `idx_order_sn` (`order_sn`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '支付成功但订单状态不匹配，待对账或退款';
 
 -- ----------------------------
 -- Records of oms_order
@@ -1662,28 +1689,36 @@ CREATE TABLE `pms_sku_stock`  (
   `product_id` bigint(20) NULL DEFAULT NULL,
   `sku_code` varchar(64) CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL COMMENT 'sku编码',
   `price` decimal(10, 2) NULL DEFAULT NULL,
-  `stock` int(11) NULL DEFAULT 0 COMMENT '库存',
+  `stock` int(11) NOT NULL DEFAULT 0 COMMENT '库存',
   `low_stock` int(11) NULL DEFAULT NULL COMMENT '预警库存',
   `pic` varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL COMMENT '展示图片',
   `sale` int(11) NULL DEFAULT NULL COMMENT '销量',
   `promotion_price` decimal(10, 2) NULL DEFAULT NULL COMMENT '单品促销价格',
-  `lock_stock` int(11) NULL DEFAULT 0 COMMENT '锁定库存',
+  `lock_stock` int(11) NOT NULL DEFAULT 0 COMMENT '锁定库存',
   `sp_data` varchar(500) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL COMMENT '商品销售属性，json格式',
   PRIMARY KEY (`id`) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 243 CHARACTER SET = utf8 COLLATE = utf8_general_ci COMMENT = 'sku的库存' ROW_FORMAT = DYNAMIC;
 
+-- A 阶段说明：stock / lock_stock 均为 NOT NULL DEFAULT 0，且下发的种子数据已清除
+-- 历史演示数据中的负数 lock_stock。条件更新 SQL 仍会在写入时再次校验 NULL、负数与
+-- 超锁定，作为应用侧第一道防线。如需数据库层强约束，可在确认后台改库存流程后启用：
+-- ALTER TABLE `pms_sku_stock`
+--   ADD CONSTRAINT `chk_sku_stock_non_negative` CHECK (`stock` >= 0),
+--   ADD CONSTRAINT `chk_sku_lock_non_negative`  CHECK (`lock_stock` >= 0),
+--   ADD CONSTRAINT `chk_sku_lock_le_stock`      CHECK (`lock_stock` <= `stock`);
+
 -- ----------------------------
 -- Records of pms_sku_stock
 -- ----------------------------
-INSERT INTO `pms_sku_stock` VALUES (98, 27, '201808270027001', 2699.00, 86, NULL, NULL, NULL, NULL, -24, '[{\"key\":\"颜色\",\"value\":\"黑色\"},{\"key\":\"容量\",\"value\":\"32G\"}]');
+INSERT INTO `pms_sku_stock` VALUES (98, 27, '201808270027001', 2699.00, 86, NULL, NULL, NULL, NULL, 0, '[{\"key\":\"颜色\",\"value\":\"黑色\"},{\"key\":\"容量\",\"value\":\"32G\"}]');
 INSERT INTO `pms_sku_stock` VALUES (99, 27, '201808270027002', 2999.00, 100, NULL, NULL, NULL, NULL, 0, '[{\"key\":\"颜色\",\"value\":\"黑色\"},{\"key\":\"容量\",\"value\":\"64G\"}]');
 INSERT INTO `pms_sku_stock` VALUES (100, 27, '201808270027003', 2699.00, 100, NULL, NULL, NULL, NULL, 0, '[{\"key\":\"颜色\",\"value\":\"蓝色\"},{\"key\":\"容量\",\"value\":\"32G\"}]');
 INSERT INTO `pms_sku_stock` VALUES (101, 27, '201808270027004', 2999.00, 100, NULL, NULL, NULL, NULL, 0, '[{\"key\":\"颜色\",\"value\":\"蓝色\"},{\"key\":\"容量\",\"value\":\"64G\"}]');
-INSERT INTO `pms_sku_stock` VALUES (102, 28, '201808270028001', 649.00, 99, NULL, NULL, NULL, NULL, -8, '[{\"key\":\"颜色\",\"value\":\"金色\"},{\"key\":\"容量\",\"value\":\"16G\"}]');
-INSERT INTO `pms_sku_stock` VALUES (103, 28, '201808270028002', 699.00, 99, NULL, NULL, NULL, NULL, -8, '[{\"key\":\"颜色\",\"value\":\"金色\"},{\"key\":\"容量\",\"value\":\"32G\"}]');
+INSERT INTO `pms_sku_stock` VALUES (102, 28, '201808270028001', 649.00, 99, NULL, NULL, NULL, NULL, 0, '[{\"key\":\"颜色\",\"value\":\"金色\"},{\"key\":\"容量\",\"value\":\"16G\"}]');
+INSERT INTO `pms_sku_stock` VALUES (103, 28, '201808270028002', 699.00, 99, NULL, NULL, NULL, NULL, 0, '[{\"key\":\"颜色\",\"value\":\"金色\"},{\"key\":\"容量\",\"value\":\"32G\"}]');
 INSERT INTO `pms_sku_stock` VALUES (104, 28, '201808270028003', 649.00, 100, NULL, NULL, NULL, NULL, 0, '[{\"key\":\"颜色\",\"value\":\"银色\"},{\"key\":\"容量\",\"value\":\"16G\"}]');
 INSERT INTO `pms_sku_stock` VALUES (105, 28, '201808270028004', 699.00, 100, NULL, NULL, NULL, NULL, 0, '[{\"key\":\"颜色\",\"value\":\"银色\"},{\"key\":\"容量\",\"value\":\"32G\"}]');
-INSERT INTO `pms_sku_stock` VALUES (106, 29, '201808270029001', 5499.00, 99, NULL, NULL, NULL, 4999.00, -8, '[{\"key\":\"颜色\",\"value\":\"金色\"},{\"key\":\"容量\",\"value\":\"32G\"}]');
+INSERT INTO `pms_sku_stock` VALUES (106, 29, '201808270029001', 5499.00, 99, NULL, NULL, NULL, 4999.00, 0, '[{\"key\":\"颜色\",\"value\":\"金色\"},{\"key\":\"容量\",\"value\":\"32G\"}]');
 INSERT INTO `pms_sku_stock` VALUES (107, 29, '201808270029002', 6299.00, 100, NULL, NULL, NULL, 5799.00, 0, '[{\"key\":\"颜色\",\"value\":\"金色\"},{\"key\":\"容量\",\"value\":\"64G\"}]');
 INSERT INTO `pms_sku_stock` VALUES (108, 29, '201808270029003', 5499.00, 100, NULL, NULL, NULL, 4999.00, 0, '[{\"key\":\"颜色\",\"value\":\"银色\"},{\"key\":\"容量\",\"value\":\"32G\"}]');
 INSERT INTO `pms_sku_stock` VALUES (109, 29, '201808270029004', 6299.00, 100, NULL, NULL, NULL, 5799.00, 0, '[{\"key\":\"颜色\",\"value\":\"银色\"},{\"key\":\"容量\",\"value\":\"64G\"}]');

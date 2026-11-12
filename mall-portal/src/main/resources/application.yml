@@ -74,3 +74,14 @@ rabbitmq:
     name:
       cancelOrder: cancelOrderQueue
 
+# A 阶段：订单状态与库存一致性
+mall:
+  order:
+    # 仅隔离测试环境可开启；开启后才有 /order/paySuccess、/order/cancelOrder 调试入口
+    debug-endpoints-enabled: false
+    # 超时扫描兜底：消息丢失时仍能被取消并释放锁定库存
+    timeout-scan:
+      enabled: true
+      initial-delay-ms: 30000
+      interval-ms: 60000
+

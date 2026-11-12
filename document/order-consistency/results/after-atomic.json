@@ -1,0 +1,6 @@
+[
+  {"mode":"atomic","mysql":"8.0.37","isolation":"REPEATABLE-READ","initialStock":10,"threads":20,"quantityPerOrder":1,"success":10,"failed":10,"errors":0,"expectedLock":10,"finalStock":10,"finalLockStock":10,"oversold":false,"elapsedMs":55},
+  {"mode":"atomic","mysql":"8.0.37","isolation":"REPEATABLE-READ","initialStock":10,"threads":20,"quantityPerOrder":2,"success":5,"failed":15,"errors":0,"expectedLock":10,"finalStock":10,"finalLockStock":10,"oversold":false,"elapsedMs":48},
+  {"mode":"atomic","mysql":"8.0.37","isolation":"REPEATABLE-READ","initialStock":10,"threads":50,"quantityPerOrder":1,"success":10,"failed":40,"errors":0,"expectedLock":10,"finalStock":10,"finalLockStock":10,"oversold":false,"elapsedMs":82},
+  {"mode":"atomic","mysql":"8.0.37","isolation":"REPEATABLE-READ","initialStock":30,"threads":30,"quantityPerOrder":2,"success":15,"failed":15,"errors":0,"expectedLock":30,"finalStock":30,"finalLockStock":30,"oversold":false,"elapsedMs":93}
+]

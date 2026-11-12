@@ -10,10 +10,11 @@ import com.alipay.api.request.AlipayTradeQueryRequest;
 import com.alipay.api.request.AlipayTradeWapPayRequest;
 import com.alipay.api.response.AlipayTradeQueryResponse;
 import com.macro.mall.common.exception.Asserts;
-import com.macro.mall.mapper.OmsOrderMapper;
 import com.macro.mall.model.OmsOrder;
 import com.macro.mall.portal.config.AlipayConfig;
 import com.macro.mall.portal.domain.AliPayParam;
+import com.macro.mall.portal.domain.PayCommand;
+import com.macro.mall.portal.domain.PayResult;
 import com.macro.mall.portal.service.AlipayService;
 import com.macro.mall.portal.service.OmsPortalOrderService;
 import lombok.extern.slf4j.Slf4j;
@@ -24,154 +25,207 @@ import java.math.BigDecimal;
 import java.util.Map;
 
 /**
- * @auther macrozheng
- * @description 支付宝支付Service实现类
- * @date 2023/9/8
- * @github https://github.com/macrozheng
+ * 支付宝支付 Service。
+ *
+ * <p>A 阶段：验签只是第一步。回调还必须核对 app_id / 商户订单号 / 实付金额 /
+ * 交易状态，再由订单状态机处理重复通知与「订单已取消但支付成功」。</p>
  */
 @Slf4j
 @Service
 public class AlipayServiceImpl implements AlipayService {
+
+    private static final String TRADE_SUCCESS = "TRADE_SUCCESS";
+    private static final String TRADE_FINISHED = "TRADE_FINISHED";
+    private static final String RESULT_SUCCESS = "success";
+    private static final String RESULT_FAILURE = "failure";
+
     @Autowired
     private AlipayConfig alipayConfig;
     @Autowired
     private AlipayClient alipayClient;
     @Autowired
-    private OmsOrderMapper orderMapper;
-    @Autowired
     private OmsPortalOrderService portalOrderService;
+
     @Override
     public String pay(AliPayParam aliPayParam) {
         AlipayTradePagePayRequest request = new AlipayTradePagePayRequest();
-        if(StrUtil.isNotEmpty(alipayConfig.getNotifyUrl())){
-            //异步接收地址，公网可访问
-            request.setNotifyUrl(alipayConfig.getNotifyUrl());
-        }
-        if(StrUtil.isNotEmpty(alipayConfig.getReturnUrl())){
-            //同步跳转地址
-            request.setReturnUrl(alipayConfig.getReturnUrl());
-        }
-        //******必传参数******
+        fillCallbackUrls(request::setNotifyUrl, request::setReturnUrl);
         JSONObject bizContent = new JSONObject();
-        //商户订单号，商家自定义，保持唯一性
         bizContent.put("out_trade_no", aliPayParam.getOutTradeNo());
-        //订单总金额以数据库中订单表中为准
-        OmsOrder order = portalOrderService.getOrderByOrderSn(aliPayParam.getOutTradeNo());
-        if(order==null||order.getPayAmount()==null){
-            Asserts.fail("订单信息或金额不能为空！");
-        }
-        BigDecimal totalAmount = order.getPayAmount();
-        //支付金额，最小值0.01元
+        BigDecimal totalAmount = requirePayableAmount(aliPayParam.getOutTradeNo());
         bizContent.put("total_amount", totalAmount);
-        //订单标题，不可使用特殊符号
         bizContent.put("subject", aliPayParam.getSubject());
-        //电脑网站支付场景固定传值FAST_INSTANT_TRADE_PAY
         bizContent.put("product_code", "FAST_INSTANT_TRADE_PAY");
         request.setBizContent(bizContent.toString());
-        String formHtml = null;
         try {
-            formHtml = alipayClient.pageExecute(request).getBody();
+            return alipayClient.pageExecute(request).getBody();
         } catch (AlipayApiException e) {
-            e.printStackTrace();
+            log.error("发起电脑网站支付异常", e);
+            return null;
         }
-        return formHtml;
     }
 
     @Override
     public String notify(Map<String, String> params) {
-        String result = "failure";
         boolean signVerified = false;
         try {
-            //调用SDK验证签名
-            signVerified = AlipaySignature.rsaCheckV1(params, alipayConfig.getAlipayPublicKey(), alipayConfig.getCharset(), alipayConfig.getSignType());
+            signVerified = AlipaySignature.rsaCheckV1(params, alipayConfig.getAlipayPublicKey(),
+                    alipayConfig.getCharset(), alipayConfig.getSignType());
         } catch (AlipayApiException e) {
-            log.error("支付回调签名校验异常！",e);
-            e.printStackTrace();
+            log.error("支付回调签名校验异常", e);
         }
-        if (signVerified) {
-            String tradeStatus = params.get("trade_status");
-            if("TRADE_SUCCESS".equals(tradeStatus)){
-                result = "success";
-                log.info("notify方法被调用了，tradeStatus:{}",tradeStatus);
-                String outTradeNo = params.get("out_trade_no");
-                portalOrderService.paySuccessByOrderSn(outTradeNo,1);
-            }else{
-                log.warn("订单未支付成功，trade_status:{}",tradeStatus);
+        if (!signVerified) {
+            log.warn("支付回调签名校验失败，拒绝处理");
+            return RESULT_FAILURE;
+        }
+
+        // 1) 业务字段核对：应用 ID、订单号、实付金额、交易状态、第三方交易号。
+        String appId = params.get("app_id");
+        if (StrUtil.isNotEmpty(alipayConfig.getAppId()) && !alipayConfig.getAppId().equals(appId)) {
+            log.warn("支付回调 app_id 不匹配，拒绝处理：appId={}", appId);
+            return RESULT_FAILURE;
+        }
+        String tradeStatus = params.get("trade_status");
+        if (!TRADE_SUCCESS.equals(tradeStatus) && !TRADE_FINISHED.equals(tradeStatus)) {
+            // 已验签的非成功状态无需反复重投，记录后确认。
+            log.info("支付回调交易未成功，跳过：trade_status={}", tradeStatus);
+            return RESULT_SUCCESS;
+        }
+        String outTradeNo = params.get("out_trade_no");
+        String tradeNo = params.get("trade_no");
+        BigDecimal paidAmount = parseAmount(params.get("total_amount"));
+        if (StrUtil.isBlank(outTradeNo) || StrUtil.isBlank(tradeNo) || paidAmount == null) {
+            log.warn("支付回调缺少订单号/交易号/金额，拒绝处理：outTradeNo={}, tradeNo={}", outTradeNo, tradeNo);
+            return RESULT_FAILURE;
+        }
+
+        // 2) 交给订单状态机：条件流转、扣库存、重复通知幂等、晚到支付落待对账记录。
+        PayCommand command = PayCommand.fromGateway(outTradeNo, 1, paidAmount, tradeNo, params.toString());
+        try {
+            PayResult result = portalOrderService.paySuccessByOrderSn(command);
+            switch (result.getStatus()) {
+                case SUCCESS -> log.info("支付回调处理成功：orderSn={}, tradeNo={}", outTradeNo, tradeNo);
+                case DUPLICATE -> log.info("重复支付通知，幂等返回：orderSn={}, tradeNo={}", outTradeNo, tradeNo);
+                case LATE_PAYMENT_RECORDED -> log.error(
+                        "支付晚到：订单已关闭/无效，已记录待对账异常，需退款或人工处理：orderSn={}, tradeNo={}",
+                        outTradeNo, tradeNo);
+                case REJECTED -> {
+                    log.warn("支付回调被拒绝：orderSn={}, reason={}", outTradeNo, result.getMessage());
+                    return RESULT_FAILURE;
+                }
             }
-        } else {
-            log.warn("支付回调签名校验失败！");
+            // LATE_PAYMENT_RECORDED 返回 success 不是「忽略」：异常已 REQUIRES_NEW 落库并 ERROR 告警，
+            // 返回 success 只是避免第三方对同一笔已完成的支付无限重投。
+            return RESULT_SUCCESS;
+        } catch (Exception e) {
+            log.error("支付回调处理异常，返回 failure 等待重投：orderSn={}, tradeNo={}", outTradeNo, tradeNo, e);
+            return RESULT_FAILURE;
         }
-        return result;
     }
 
     @Override
     public String query(String outTradeNo, String tradeNo) {
         AlipayTradeQueryRequest request = new AlipayTradeQueryRequest();
-        //******必传参数******
         JSONObject bizContent = new JSONObject();
-        //设置查询参数，out_trade_no和trade_no至少传一个
-        if(StrUtil.isNotEmpty(outTradeNo)){
-            bizContent.put("out_trade_no",outTradeNo);
+        if (StrUtil.isNotEmpty(outTradeNo)) {
+            bizContent.put("out_trade_no", outTradeNo);
         }
-        if(StrUtil.isNotEmpty(tradeNo)){
-            bizContent.put("trade_no",tradeNo);
+        if (StrUtil.isNotEmpty(tradeNo)) {
+            bizContent.put("trade_no", tradeNo);
         }
-        //交易结算信息: trade_settle_info
         String[] queryOptions = {"trade_settle_info"};
         bizContent.put("query_options", queryOptions);
         request.setBizContent(bizContent.toString());
-        AlipayTradeQueryResponse response = null;
+
+        AlipayTradeQueryResponse response;
         try {
             response = alipayClient.execute(request);
         } catch (AlipayApiException e) {
-            log.error("查询支付宝账单异常！",e);
+            log.error("查询支付宝账单异常", e);
+            return null;
         }
-        if(response.isSuccess()){
-            log.info("查询支付宝账单成功！");
-            if("TRADE_SUCCESS".equals(response.getTradeStatus())){
-                portalOrderService.paySuccessByOrderSn(outTradeNo,1);
+        if (response == null) {
+            log.error("查询支付宝账单返回空响应");
+            return null;
+        }
+        if (!response.isSuccess()) {
+            log.error("查询支付宝账单失败：{}", response.getMsg());
+            return response.getTradeStatus();
+        }
+        String status = response.getTradeStatus();
+        if (TRADE_SUCCESS.equals(status) || TRADE_FINISHED.equals(status)) {
+            // 主动查询同样必须核对金额与商户订单号，不能只凭交易状态就改本地订单。
+            BigDecimal paidAmount = parseAmount(response.getTotalAmount());
+            String responseOutTradeNo = StrUtil.isNotEmpty(response.getOutTradeNo())
+                    ? response.getOutTradeNo() : outTradeNo;
+            if (paidAmount == null || StrUtil.isBlank(responseOutTradeNo)) {
+                log.warn("主动查询缺少金额或订单号，跳过：outTradeNo={}", responseOutTradeNo);
+                return status;
             }
-        } else {
-            log.error("查询支付宝账单失败！");
+            PayCommand command = PayCommand.fromGateway(responseOutTradeNo, 1, paidAmount,
+                    response.getTradeNo(), response.getBody());
+            PayResult result = portalOrderService.paySuccessByOrderSn(command);
+            log.info("主动查询支付结果：orderSn={}, status={}, localResult={}",
+                    responseOutTradeNo, status, result.getStatus());
         }
-        //交易状态：WAIT_BUYER_PAY（交易创建，等待买家付款）、TRADE_CLOSED（未付款交易超时关闭，或支付完成后全额退款）、TRADE_SUCCESS（交易支付成功）、TRADE_FINISHED（交易结束，不可退款）
-        return response.getTradeStatus();
+        return status;
     }
 
     @Override
     public String webPay(AliPayParam aliPayParam) {
-        AlipayTradeWapPayRequest request = new AlipayTradeWapPayRequest ();
-        if(StrUtil.isNotEmpty(alipayConfig.getNotifyUrl())){
-            //异步接收地址，公网可访问
-            request.setNotifyUrl(alipayConfig.getNotifyUrl());
-        }
-        if(StrUtil.isNotEmpty(alipayConfig.getReturnUrl())){
-            //同步跳转地址
-            request.setReturnUrl(alipayConfig.getReturnUrl());
-        }
-        //******必传参数******
+        AlipayTradeWapPayRequest request = new AlipayTradeWapPayRequest();
+        fillCallbackUrls(request::setNotifyUrl, request::setReturnUrl);
         JSONObject bizContent = new JSONObject();
-        //商户订单号，商家自定义，保持唯一性
         bizContent.put("out_trade_no", aliPayParam.getOutTradeNo());
-        //订单总金额以数据库中订单表中为准
-        OmsOrder order = portalOrderService.getOrderByOrderSn(aliPayParam.getOutTradeNo());
-        if(order==null||order.getPayAmount()==null){
-            Asserts.fail("订单信息或金额不能为空！");
-        }
-        BigDecimal totalAmount = order.getPayAmount();
-        //支付金额，最小值0.01元
+        BigDecimal totalAmount = requirePayableAmount(aliPayParam.getOutTradeNo());
         bizContent.put("total_amount", totalAmount);
-        //订单标题，不可使用特殊符号
         bizContent.put("subject", aliPayParam.getSubject());
-        //手机网站支付默认传值FAST_INSTANT_TRADE_PAY
         bizContent.put("product_code", "QUICK_WAP_WAY");
         request.setBizContent(bizContent.toString());
-        String formHtml = null;
         try {
-            formHtml = alipayClient.pageExecute(request).getBody();
+            return alipayClient.pageExecute(request).getBody();
         } catch (AlipayApiException e) {
-            e.printStackTrace();
+            log.error("发起手机网站支付异常", e);
+            return null;
         }
-        return formHtml;
+    }
+
+    // ---------------------------------------------------------------------
+
+    private void fillCallbackUrls(java.util.function.Consumer<String> notifySetter,
+                                  java.util.function.Consumer<String> returnSetter) {
+        if (StrUtil.isNotEmpty(alipayConfig.getNotifyUrl())) {
+            notifySetter.accept(alipayConfig.getNotifyUrl());
+        }
+        if (StrUtil.isNotEmpty(alipayConfig.getReturnUrl())) {
+            returnSetter.accept(alipayConfig.getReturnUrl());
+        }
+    }
+
+    /** 发起支付：金额必须来自数据库订单，且订单必须仍是待付款。 */
+    private BigDecimal requirePayableAmount(String outTradeNo) {
+        OmsOrder order = portalOrderService.getOrderByOrderSn(outTradeNo);
+        if (order == null || order.getPayAmount() == null) {
+            Asserts.fail("订单信息或金额不能为空！");
+        }
+        if (order.getStatus() == null || order.getStatus() != 0) {
+            Asserts.fail("订单不是待付款状态，不能发起支付！");
+        }
+        if (order.getPayAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            Asserts.fail("订单应付金额异常！");
+        }
+        return order.getPayAmount();
+    }
+
+    private BigDecimal parseAmount(String amount) {
+        if (StrUtil.isBlank(amount)) {
+            return null;
+        }
+        try {
+            return new BigDecimal(amount.trim());
+        } catch (NumberFormatException e) {
+            log.warn("无法解析支付金额：{}", amount);
+            return null;
+        }
     }
 }
