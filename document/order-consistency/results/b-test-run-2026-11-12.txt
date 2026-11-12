@@ -1,0 +1,76 @@
+B 阶段全量测试原始输出（2026-11-12 12:42:47 +08:00，mall-local 容器）
+来源日志：/tmp/b-full-test.log（Maven 全量输出，121 KB）
+命令：mvn.cmd -B -pl mall-portal -am -DskipTests=false -Dsurefire.failIfNoSpecifiedTests=false -Ddocker.skip=true test
+
+== 环境（实测采集） ==
+docker compose -p mall-local -f document/docker/docker-compose-local.yml
+  mall-local-mysql-1      Up   MySQL 8.4.7
+  mall-local-rabbitmq-1   Up   RabbitMQ 4.2.9
+  mall-local-redis-1      Up
+  mall-local-mongo-1      Up
+MySQL: SELECT VERSION(), @@transaction_isolation, @@global.time_zone, NOW();
+  8.4.7 | REPEATABLE-READ | +08:00 | 2026-11-12 12:51:38
+测试库：mall_it（A 回归）、mall_it_b（B 阶段，与开发库 mall 隔离）
+开发库：mall（真实旧结构，已执行 A+B 迁移）
+
+== 结构化场景输出（测试代码主动打印，ASCII 标记） ==
+[B-MQ-OUTAGE] orderId=165, eventId=OTC-165, duringStatus=PENDING, retryCount=1, afterStatus=SENT, publishCalls=2
+[B-REAL-OUTAGE] orderId=168, eventId=OTC-168, finalStatus=4, stock=10, lock=0, messageStatus=SENT, retryCount=1, dlqDepth=0
+[B-POISON] dlqDepth=1, mainDepth=0, retryDepth=0, failureRows=1
+[B-DUPLICATE] orderId=171, deliveries=3, finalStatus=4, stock=10, lock=0, consumeFailures=0
+[B-LEASE] eventId=OTC-181, orderId=181, winner=instance-A, loser=instance-B, attemptVersion=1
+
+== A 阶段回归标记（同一轮全量测试中一并重跑） ==
+[GENERATE_ORDER] stock=10, threads=20, qty=1, successOrders=10, rejected=10, errors=0, dbOrders=10, finalStock=10, finalLock=10, elapsedMs=298
+[RACE] rounds=20, paidWins=11, cancelWins=9
+[CONCURRENT] stock=10, threads=30, qty=1, success=10, errors=0, finalLock=10, elapsedMs=100
+
+== 发布失败链路日志抽样 ==
+WARN  OmsOrderMessageDispatcher : 本地消息发布失败，安排退避重试：eventId=OTC-160, retryCount=1, nextRetryTime=..., reason=NACK: broker nack
+ERROR OmsOrderMessageDispatcher : 本地消息发布失败告警：达到重试上限已置 FAILED，需人工排查/重试。eventId=OTC-160, orderId=160, retryCount=2, reason=UNROUTABLE: NO_ROUTE
+（控制台中文因 Windows 默认编码显示为乱码，属于日志编码问题，不是功能失败；结构化标记均为 ASCII。）
+
+== Surefire 汇总 ==
+Tests run: 4,  Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.it.GenerateOrderConcurrencyTest   (A)
+Tests run: 3,  Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.it.OrderSkuAggregatorTest          (A)
+Tests run: 11, Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.it.OrderStateTransitionServiceTest (A)
+Tests run: 4,  Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.it.OrderTimeOutScanTest             (A)
+Tests run: 8,  Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.it.PortalOrderDaoAtomicSqlTest      (A)
+Tests run: 1,  Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.MallPortalApplicationTests         (A)
+Tests run: 1,  Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.PortalProductDaoTests              (A)
+Tests run: 8,  Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.it.OutboxDaoTest                   (B)
+Tests run: 7,  Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.it.OrderMessageDispatchTest        (B)
+Tests run: 9,  Failures: 0, Errors: 0, Skipped: 0 -- com.macro.mall.portal.it.OrderMessageEndToEndRabbitTest  (B)
+
+Tests run: 56, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS   Total time: 01:38 min
+Reactor: mall / mall-common / mall-mbg / mall-security / mall-portal 均 SUCCESS
+
+== 全项目编译（同日） ==
+命令：mvn.cmd -B -DskipTests -Ddocker.skip=true compile
+mall-common / mall-mbg / mall-security / mall-demo / mall-admin / mall-search / mall-portal 全部 SUCCESS
+BUILD SUCCESS
+交付前复核（2026-11-12 12:58:53 +08:00）：同一命令再次执行，8 模块 SUCCESS，
+Total time 8.175 s（增量，mall-portal "Nothing to compile - all classes are up to date"）。
+
+== 真实旧库 A+B 迁移验证（开发库 mall） ==
+mall_a_precheck.sql / mall_b_precheck.sql 先只读预检：
+  发现 4 条负数 lock_stock：98(-24)、102(-8)、103(-8)、106(-8)，均确认无待付款订单占用
+  人工确认后：UPDATE pms_sku_stock SET lock_stock=0 WHERE id IN (98,102,103,106) AND lock_stock<0;
+mall_a_migration.sql -> EXIT=0；mall_b_migration.sql -> EXIT=0
+迁移后（2026-11-12 复核 SELECT）：
+  oms_order_message           PENDING 1
+  backfill_exceptions         0
+  pending_without_expire_time 0
+  pending_total               1
+
+注：另在构造的旧库样本中特意保留过一笔 create_time IS NULL 的订单 LEGACY-NO-CREATE，
+用于验证「不猜测到期时间」的守卫，该样本的迁移输出为 backfill_exceptions=1 /
+pending_without_expire_time=1，属于预期行为，不是迁移失败。真实开发库没有这类订单。
+
+== 说明 ==
+1. 日志中出现 ERROR/WARN（FAILED 告警、毒消息、发布 NACK、历史库存异常预检）均为
+   测试用例主动注入的故障路径，属于被断言覆盖的预期输出；Surefire 最终 0 失败 / 0 错误。
+2. 全量套件在此之前已多次重跑；本文件记录的是代码定稿后的最后一次完整执行
+   （最后一个源文件修改时间 12:40:52，早于本轮测试结束时间 12:42:47）。
+3. 耗时为单机单次执行值，不作为性能/QPS 结论。

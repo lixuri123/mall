@@ -43,6 +43,9 @@ import java.util.UUID;
         "spring.rabbitmq.listener.simple.auto-startup=false",
         "spring.rabbitmq.listener.direct.auto-startup=false",
         "mall.order.timeout-scan.enabled=false",
+        "mall.order.outbox.dispatch.enabled=false",
+        "mall.order.outbox.consume.enabled=false",
+        "mall.order.outbox.metrics.enabled=false",
         "logging.level.root=warn",
         "logging.level.com.macro.mall=warn"
 })
@@ -81,6 +84,8 @@ public abstract class AbstractOrderIntegrationTest {
         for (Long orderId : createdOrderIds) {
             execute("DELETE FROM oms_order_item WHERE order_id = " + orderId);
             execute("DELETE FROM oms_order_pay_anomaly WHERE order_id = " + orderId);
+            execute("DELETE FROM oms_order_message WHERE order_id = " + orderId);
+            execute("DELETE FROM oms_order_consume_failure WHERE order_id = " + orderId);
             execute("DELETE FROM oms_order WHERE id = " + orderId);
         }
         for (Long skuId : createdSkuIds) {
@@ -137,6 +142,14 @@ public abstract class AbstractOrderIntegrationTest {
         order.setGrowth(0);
         orderMapper.insertSelective(order);
         createdOrderIds.add(order.getId());
+        // B 阶段：系统取消/超时扫描以固定 expire_time 为准，测试订单必须显式设置。
+        // 采用与 oms_order_setting.normal_order_overtime=120 一致的规则。
+        try {
+            execute("UPDATE oms_order SET expire_time = DATE_ADD(create_time, INTERVAL 120 MINUTE) WHERE id = "
+                    + order.getId());
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
         return order.getId();
     }
 

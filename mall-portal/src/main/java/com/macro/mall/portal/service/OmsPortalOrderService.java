@@ -2,6 +2,7 @@ package com.macro.mall.portal.service;
 
 import com.macro.mall.common.api.CommonPage;
 import com.macro.mall.model.OmsOrder;
+import com.macro.mall.portal.domain.CancelResult;
 import com.macro.mall.portal.domain.ConfirmOrderResult;
 import com.macro.mall.portal.domain.OmsOrderDetail;
 import com.macro.mall.portal.domain.OrderParam;
@@ -43,10 +44,10 @@ public interface OmsPortalOrderService {
     /** 用户主动取消：校验订单归属当前登录会员。 */
     void cancelUserOrder(Long orderId);
 
-    /** 系统侧逐单取消（超时消息）：校验订单确实已经超时。 */
-    void cancelBySystem(Long orderId);
+    /** 系统侧逐单取消（超时消息 / 定时扫描）：以数据库固定到期时间校验，返回可判定的结果。 */
+    CancelResult cancelBySystem(Long orderId);
 
-    /** 发送延迟取消消息（仅在显式开启的调试入口使用）。 */
+    /** B 阶段：为历史订单补齐本地消息记录（不再直接发 MQ）。 */
     void sendDelayMessageCancelOrder(Long orderId);
 
     /** 确认收货。 */

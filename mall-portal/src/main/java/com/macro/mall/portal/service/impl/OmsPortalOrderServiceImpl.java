@@ -2,6 +2,8 @@ package com.macro.mall.portal.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollUtil;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.pagehelper.PageHelper;
 import com.macro.mall.common.api.CommonPage;
 import com.macro.mall.common.exception.Asserts;
@@ -12,12 +14,12 @@ import com.macro.mall.mapper.OmsOrderSettingMapper;
 import com.macro.mall.mapper.PmsSkuStockMapper;
 import com.macro.mall.mapper.UmsIntegrationConsumeSettingMapper;
 import com.macro.mall.model.*;
-import com.macro.mall.portal.component.CancelOrderSender;
 import com.macro.mall.portal.dao.PortalOrderDao;
 import com.macro.mall.portal.dao.PortalOrderItemDao;
 import com.macro.mall.portal.domain.*;
 import com.macro.mall.portal.exception.OrderConsistencyException;
 import com.macro.mall.portal.service.OmsCartItemService;
+import com.macro.mall.portal.service.OmsOrderMessageService;
 import com.macro.mall.portal.service.OmsPortalOrderService;
 import com.macro.mall.portal.service.OrderStateTransitionService;
 import com.macro.mall.portal.service.UmsMemberCacheService;
@@ -30,8 +32,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
@@ -52,8 +52,15 @@ import java.util.stream.Collectors;
  *   <li>锁库存改为 MySQL 条件更新，按 SKU 汇总、按 skuId 升序逐条执行，检查影响行数。</li>
  *   <li>库存锁定、订单写入、券/积分、购物车清理在同一个数据库事务内，任一失败一起回滚。</li>
  *   <li>修复 useIntegration 在 insert 之后设置导致未持久化、取消时无法返还的问题。</li>
- *   <li>延迟取消消息改到事务提交后发送；MQ 失败不阻断下单，由定时扫描兜底。</li>
  *   <li>支付与取消委托给独立 Bean {@link OrderStateTransitionService}，避免自调用事务失效。</li>
+ * </ul>
+ *
+ * <p>B 阶段（超时取消消息可靠性）：</p>
+ * <ul>
+ *   <li>下单时把固定 {@code expire_time} 与 PENDING 本地消息写入<strong>同一个数据库事务</strong>，
+ *       移除事务内 / afterCommit 直接发布 MQ 的路径。</li>
+ *   <li>订单回滚则消息一起回滚；订单提交则消息必然存在，由到期扫描任务负责发布。</li>
+ *   <li>超时兜底扫描改用数据库中固定的到期时间，不再依赖「当前配置 + create_time」。</li>
  * </ul>
  */
 @Slf4j
@@ -94,7 +101,9 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     @Autowired
     private OmsOrderItemMapper orderItemMapper;
     @Autowired
-    private CancelOrderSender cancelOrderSender;
+    private OmsOrderMessageService messageService;
+    @Autowired
+    private ObjectMapper objectMapper;
     @Autowired
     private OrderStateTransitionService orderStateTransitionService;
     @Autowired
@@ -229,8 +238,9 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         order.setUseIntegration(usedIntegration);
         order.setPayAmount(calcPayAmount(order));
 
+        Date createTime = new Date();
         order.setMemberId(currentMember.getId());
-        order.setCreateTime(new Date());
+        order.setCreateTime(createTime);
         order.setMemberUsername(currentMember.getUsername());
         int payType = orderParam.getPayType() == null ? 0 : orderParam.getPayType();
         order.setPayType(payType);
@@ -253,9 +263,20 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         if (CollUtil.isNotEmpty(orderSettings)) {
             order.setAutoConfirmDay(orderSettings.get(0).getConfirmOvertime());
         }
+        // B 阶段：到期时间必须在下单时固定下来，之后修改后台配置不影响已有订单。
+        if (CollUtil.isEmpty(orderSettings) || orderSettings.get(0).getNormalOrderOvertime() == null
+                || orderSettings.get(0).getNormalOrderOvertime() <= 0) {
+            throw new OrderConsistencyException("订单超时时间配置缺失，无法保存固定到期时间，下单已回滚");
+        }
+        Date expireTime = new Date(createTime.getTime()
+                + orderSettings.get(0).getNormalOrderOvertime() * 60_000L);
 
         // ---------- 6. 写订单与明细（与锁库存同一事务） ----------
         orderMapper.insert(order);
+        // MBG 生成的 OmsOrder 不含 expire_time，用自定义 DAO 在同一事务里补写。
+        if (portalOrderDao.updateOrderExpireTime(order.getId(), expireTime) != 1) {
+            throw new OrderConsistencyException("订单固定到期时间写入失败（orderId=" + order.getId() + "），下单已回滚");
+        }
         for (OmsOrderItem orderItem : orderItemList) {
             orderItem.setOrderId(order.getId());
             orderItem.setOrderSn(order.getOrderSn());
@@ -281,11 +302,15 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         // ---------- 8. 清理购物车 ----------
         deleteCartItemList(cartPromotionItemList, currentMember);
 
-        // ---------- 9. 事务提交后发送延迟取消消息 ----------
-        // 数据库事务与 MQ 发布不是同一个原子操作：放在事务内会出现
-        // 「订单回滚但消息已发」和「订单提交但消息丢失」。这里改为 afterCommit 发送，
-        // 发送失败只告警，由定时超时扫描兜底（完整可靠投递属于 B）。
-        registerCancelMessageAfterCommit(order.getId());
+        // ---------- 9. 同事务写入本地消息表（B 阶段） ----------
+        // 订单、锁库存、expire_time、PENDING 消息同生共死：
+        // 消息表插入失败则整笔下单回滚；事务提交后消息一定存在，后续由到期扫描负责发布。
+        try {
+            String payload = objectMapper.writeValueAsString(OrderCancelMessage.of(order.getId(), expireTime));
+            messageService.insertPendingForNewOrder(order.getId(), expireTime, payload);
+        } catch (JsonProcessingException e) {
+            throw new OrderConsistencyException("超时取消消息序列化失败，下单已回滚", e);
+        }
 
         Map<String, Object> result = new HashMap<>();
         result.put("order", order);
@@ -312,30 +337,26 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     }
 
     /**
-     * 超时扫描兜底：分页取候选 ID，逐单通过独立 Bean 执行条件取消。
-     * 本方法【不加事务】，每单在状态机里拥有独立事务，异常订单不会拖垮整批。
+     * 超时扫描兜底：按数据库中固定的 {@code expire_time} 分页取候选 ID，
+     * 逐单通过独立 Bean 执行条件取消。
+     *
+     * <p>本方法【不加事务】，每单在状态机里拥有独立事务，异常订单不会拖垮整批。
+     * 它解决的是「消息已发布但取消未完成」，与消息表扫描解决「任务未发布」的阶段不同。</p>
      */
     @Override
     public Integer cancelTimeOutOrder() {
-        OmsOrderSetting orderSetting = orderSettingMapper.selectByPrimaryKey(1L);
-        if (orderSetting == null || orderSetting.getNormalOrderOvertime() == null
-                || orderSetting.getNormalOrderOvertime() <= 0) {
-            log.warn("订单超时时间配置缺失，跳过本次超时扫描");
-            return 0;
-        }
-        int minute = orderSetting.getNormalOrderOvertime();
         long afterId = 0L;
         int handled = 0;
         int failed = 0;
         for (int batch = 0; batch < TIME_OUT_SCAN_MAX_BATCHES; batch++) {
-            List<Long> ids = portalOrderDao.listTimeOutOrderIds(minute, afterId, TIME_OUT_SCAN_BATCH_SIZE);
+            List<Long> ids = portalOrderDao.listExpiredPendingOrderIds(afterId, TIME_OUT_SCAN_BATCH_SIZE);
             if (CollectionUtils.isEmpty(ids)) {
                 break;
             }
             for (Long id : ids) {
                 try {
                     CancelResult result = orderStateTransitionService.cancelOrder(
-                            CancelCommand.bySystem(id, minute));
+                            CancelCommand.bySystem(id, null));
                     if (result.isSuccess()) {
                         handled++;
                     }
@@ -374,23 +395,44 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     }
 
     @Override
-    public void cancelBySystem(Long orderId) {
-        // 超时校验在状态机内完成：重复消息或提前投递不会错误释放库存。
+    public CancelResult cancelBySystem(Long orderId) {
+        // 超时校验在状态机内完成：以数据库中固定的 expire_time 为准，
+        // 重复消息或提前投递不会错误释放库存。
         CancelResult result = orderStateTransitionService.cancelOrder(
                 CancelCommand.bySystem(orderId, null));
         log.info("系统侧取消结果：orderId={}, status={}, message={}",
                 orderId, result.getStatus(), result.getMessage());
+        return result;
     }
 
+    /**
+     * B 阶段：保留该入口作为「历史订单补齐本地消息」的修复工具，不再直接发 MQ。
+     * 新订单的消息在 generateOrder 事务内已创建；重复调用由唯一键保证幂等。
+     */
     @Override
     public void sendDelayMessageCancelOrder(Long orderId) {
-        OmsOrderSetting orderSetting = orderSettingMapper.selectByPrimaryKey(1L);
-        if (orderSetting == null || orderSetting.getNormalOrderOvertime() == null) {
-            log.error("订单超时时间配置缺失，无法发送延迟取消消息：orderId={}", orderId);
+        OmsOrder order = orderMapper.selectByPrimaryKey(orderId);
+        if (order == null) {
+            log.warn("补齐超时取消消息失败：订单不存在，orderId={}", orderId);
             return;
         }
-        long delayTimes = orderSetting.getNormalOrderOvertime() * 60L * 1000L;
-        cancelOrderSender.sendMessage(orderId, delayTimes);
+        if (messageService.findByEventId(OmsOrderMessage.eventIdOf(orderId)) != null) {
+            return;
+        }
+        Date expireTime = portalOrderDao.selectOrderExpireTime(orderId);
+        if (expireTime == null) {
+            log.error("补齐超时取消消息失败：订单缺少固定到期时间，请先执行历史数据回填。orderId={}", orderId);
+            return;
+        }
+        try {
+            String payload = objectMapper.writeValueAsString(OrderCancelMessage.of(orderId, expireTime));
+            messageService.insertPendingForNewOrder(orderId, expireTime, payload);
+        } catch (JsonProcessingException e) {
+            throw new OrderConsistencyException("超时取消消息序列化失败，orderId=" + orderId, e);
+        } catch (Exception e) {
+            // 并发补齐时唯一键冲突是正常结果，已有消息即为成功。
+            log.warn("补齐超时取消消息时检测到并发/已有记录：orderId={}, error={}", orderId, e.getMessage());
+        }
     }
 
     @Override
@@ -516,27 +558,6 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
             log.info("锁库存失败：可售库存不足，skuId={}, stock={}, lockStock={}, quantity={}",
                     sku.skuId(), stock.getStock(), stock.getLockStock(), sku.quantity());
             Asserts.fail("库存不足，无法下单（SKU：" + sku.skuId() + "）");
-        }
-    }
-
-    private void registerCancelMessageAfterCommit(Long orderId) {
-        Runnable send = () -> {
-            try {
-                sendDelayMessageCancelOrder(orderId);
-            } catch (Exception e) {
-                // 消息丢失/发送失败不能让已提交的订单回滚；由定时扫描兜底并告警。
-                log.error("订单已提交但延迟取消消息发送失败，依赖定时超时扫描兜底：orderId={}", orderId, e);
-            }
-        };
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    send.run();
-                }
-            });
-        } else {
-            send.run();
         }
     }
 

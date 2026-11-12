@@ -32,6 +32,19 @@ spring:
     virtual-host: /mall
     username: mall
     password: mall
+    # B 阶段：关联式 Publisher Confirm + mandatory Return
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        # 消费者在数据库事务提交成功后才 ACK
+        acknowledge-mode: manual
+        default-requeue-rejected: false
+        prefetch: 10
+        retry:
+          enabled: false
 
 logging:
   level:

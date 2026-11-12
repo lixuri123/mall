@@ -9,7 +9,7 @@ docker compose -f document/docker/docker-compose-local.yml ps
 
 该环境使用独立 Docker 数据卷。MySQL 首次创建空卷时导入 `document/sql/mall.sql`，之后重启不会再次导入。它不会自动迁移旧数据库、消息或搜索索引。SQL 文件包含删表语句，不要手动导入有用数据的数据库。
 
-本地 MySQL 端口为 3307，用户名和密码均为 `root`。RabbitMQ 用户名和密码均为 `mall`，虚拟主机为 `/mall`。Elasticsearch 关闭了安全认证，所有这些设置仅用于本地开发。
+本地 MySQL 端口为 3307，用户名和密码均为 `root`。MySQL 以 `--default-time-zone=+08:00` 启动，与应用 JDBC 的 `serverTimezone=Asia/Shanghai` 一致；不要用 UTC 时区运行，否则 `NOW()` 与 `expire_time` / `create_time` 比较会相差 8 小时。RabbitMQ 用户名和密码均为 `mall`，虚拟主机为 `/mall`。Elasticsearch 关闭了安全认证，所有这些设置仅用于本地开发。
 
 停止容器但保留数据：
 

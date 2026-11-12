@@ -18,6 +18,11 @@ public class CancelCommand {
     private Long orderId;
     private Source source;
     private Long memberId;
+    /**
+     * @deprecated B 阶段起系统取消一律以数据库中的 {@code oms_order.expire_time} 为准，
+     * 本参数仅为兼容旧调用签名保留，不再参与超时判定。
+     */
+    @Deprecated
     private Integer overtimeMinutes;
 
     public static CancelCommand byUser(Long orderId, Long memberId) {

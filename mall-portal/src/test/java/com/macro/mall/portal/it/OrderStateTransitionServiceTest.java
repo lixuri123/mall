@@ -156,8 +156,8 @@ class OrderStateTransitionServiceTest extends AbstractOrderIntegrationTest {
         assertEquals(0, statusOf(orderId));
         assertEquals(3, lockOf(sku));
 
-        executeUpdate("UPDATE oms_order SET create_time = DATE_SUB(NOW(), INTERVAL 2 HOUR) WHERE id = ?",
-                orderId);
+        executeUpdate("UPDATE oms_order SET create_time = DATE_SUB(NOW(), INTERVAL 2 HOUR), "
+                + "expire_time = DATE_SUB(NOW(), INTERVAL 1 HOUR) WHERE id = ?", orderId);
         CancelResult late = orderStateTransitionService.cancelOrder(
                 CancelCommand.bySystem(orderId, 60));
         assertEquals(CancelResult.Status.SUCCESS, late.getStatus());

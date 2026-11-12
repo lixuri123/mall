@@ -17,6 +17,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 @SpringBootTest(properties = {
         "mall.order.timeout-scan.enabled=false",
+        "mall.order.outbox.dispatch.enabled=false",
+        "mall.order.outbox.consume.enabled=false",
+        "mall.order.outbox.metrics.enabled=false",
         "spring.rabbitmq.listener.simple.auto-startup=false",
         "spring.rabbitmq.listener.direct.auto-startup=false"
 })

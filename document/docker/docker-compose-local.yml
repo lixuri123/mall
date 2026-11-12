@@ -3,7 +3,11 @@ name: mall-local
 services:
   mysql:
     image: mysql:8.4.7
+    # 应用 JDBC 使用 serverTimezone=Asia/Shanghai，数据库必须保持同一时区，
+    # 否则 NOW()/expire_time 比较会相差 8 小时，超时判定完全失效。
+    command: --default-time-zone=+08:00
     environment:
+      TZ: Asia/Shanghai
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: mall
     ports:

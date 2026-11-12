@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.macro.mall.portal.dao.OmsOrderMessageDao">
+
+    <!-- 显式 resultMap：项目未开启 map-underscore-to-camel-case，避免字段名映射歧义。 -->
+    <resultMap id="messageMap" type="com.macro.mall.portal.domain.OmsOrderMessage">
+        <id     column="id"              property="id"/>
+        <result column="event_id"        property="eventId"/>
+        <result column="order_id"        property="orderId"/>
+        <result column="event_type"      property="eventType"/>
+        <result column="payload"         property="payload"/>
+        <result column="due_time"        property="dueTime"/>
+        <result column="status"          property="status"/>
+        <result column="retry_count"     property="retryCount"/>
+        <result column="next_retry_time" property="nextRetryTime"/>
+        <result column="lease_owner"     property="leaseOwner"/>
+        <result column="lease_until"     property="leaseUntil"/>
+        <result column="attempt_version" property="attemptVersion"/>
+        <result column="last_error"      property="lastError"/>
+        <result column="created_at"      property="createdAt"/>
+        <result column="updated_at"      property="updatedAt"/>
+    </resultMap>
+
+    <sql id="messageColumns">
+        id, event_id, order_id, event_type, payload, due_time, status, retry_count,
+        next_retry_time, lease_owner, lease_until, attempt_version, last_error, created_at, updated_at
+    </sql>
+
+    <!-- 订单与 PENDING 消息由同一个数据库事务写入；重复订单由 uk_order_event 兜底。 -->
+    <insert id="insert" parameterType="com.macro.mall.portal.domain.OmsOrderMessage"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO oms_order_message
+            (event_id, order_id, event_type, payload, due_time, status, retry_count,
+             next_retry_time, lease_owner, lease_until, attempt_version, last_error, created_at, updated_at)
+        VALUES
+            (#{eventId}, #{orderId}, #{eventType}, #{payload}, #{dueTime}, #{status}, #{retryCount},
+             #{nextRetryTime}, #{leaseOwner}, #{leaseUntil}, #{attemptVersion}, #{lastError},
+             #{createdAt}, #{updatedAt})
+    </insert>
+
+    <select id="selectByEventId" resultMap="messageMap">
+        SELECT <include refid="messageColumns"/>
+        FROM oms_order_message
+        WHERE event_id = #{eventId}
+    </select>
+
+    <select id="selectById" resultMap="messageMap">
+        SELECT <include refid="messageColumns"/>
+        FROM oms_order_message
+        WHERE id = #{id}
+    </select>
+
+    <select id="listFailed" resultMap="messageMap">
+        SELECT <include refid="messageColumns"/>
+        FROM oms_order_message
+        WHERE status = 'FAILED'
+        ORDER BY updated_at
+        LIMIT #{limit}
+    </select>
+
+    <!-- 两类可重新领取：PENDING 到重试时间；SENDING 但租约已过期（发送进程崩溃）。
+         命中 idx_dispatch / idx_lease。 -->
+    <select id="listDispatchable" resultMap="messageMap">
+        SELECT <include refid="messageColumns"/>
+        FROM oms_order_message
+        WHERE due_time &lt;= #{now}
+          AND (
+                (status = 'PENDING' AND next_retry_time &lt;= #{now})
+                OR
+                (status = 'SENDING' AND lease_until IS NOT NULL AND lease_until &lt;= #{now})
+              )
+        ORDER BY due_time, id
+        LIMIT #{limit}
+    </select>
+
+    <!-- 领取是 CAS：多个实例读到同一 version 时只有一个能更新成功。
+         attempt_version 递增，后续写结果必须带上新版本。 -->
+    <update id="claim">
+        UPDATE oms_order_message
+        SET status = 'SENDING',
+            lease_owner = #{owner},
+            lease_until = #{leaseUntil},
+            attempt_version = attempt_version + 1,
+            last_error = NULL,
+            updated_at = NOW()
+        WHERE id = #{id}
+          AND attempt_version = #{version}
+          AND due_time &lt;= #{now}
+          AND (
+                (status = 'PENDING' AND next_retry_time &lt;= #{now})
+                OR
+                (status = 'SENDING' AND lease_until IS NOT NULL AND lease_until &lt;= #{now})
+              )
+    </update>
+
+    <update id="markSent">
+        UPDATE oms_order_message
+        SET status = 'SENT',
+            lease_owner = NULL,
+            lease_until = NULL,
+            last_error = NULL,
+            updated_at = NOW()
+        WHERE event_id = #{eventId}
+          AND status = 'SENDING'
+          AND attempt_version = #{version}
+    </update>
+
+    <update id="markRetry">
+        UPDATE oms_order_message
+        SET status = CASE WHEN retry_count + 1 &gt;= #{maxRetry} THEN 'FAILED' ELSE 'PENDING' END,
+            retry_count = retry_count + 1,
+            next_retry_time = #{nextRetryTime},
+            lease_owner = NULL,
+            lease_until = NULL,
+            last_error = #{error},
+            updated_at = NOW()
+        WHERE event_id = #{eventId}
+          AND status = 'SENDING'
+          AND attempt_version = #{version}
+    </update>
+
+    <!-- 提前投递：把消息重新排到数据库中该订单的固定到期时间。
+         直接 ACK 后什么都不做会让订单失去消息路径，只能依赖超时扫描。 -->
+    <update id="rescheduleToOrderExpireTime">
+        UPDATE oms_order_message m
+        JOIN oms_order o ON o.id = m.order_id
+        SET m.status = 'PENDING',
+            m.due_time = o.expire_time,
+            m.next_retry_time = o.expire_time,
+            m.lease_owner = NULL,
+            m.lease_until = NULL,
+            m.last_error = 'EARLY_DELIVERY_RESCHEDULED',
+            m.updated_at = NOW()
+        WHERE m.event_id = #{eventId}
+          AND m.status IN ('SENT', 'SENDING')
+          AND o.expire_time IS NOT NULL
+    </update>
+
+    <update id="resetFailedForManualRetry">
+        UPDATE oms_order_message
+        SET status = 'PENDING',
+            retry_count = 0,
+            next_retry_time = #{nextRetryTime},
+            lease_owner = NULL,
+            lease_until = NULL,
+            last_error = NULL,
+            updated_at = NOW()
+        WHERE event_id = #{eventId}
+          AND status = 'FAILED'
+    </update>
+
+    <insert id="insertConsumeFailure" parameterType="com.macro.mall.portal.domain.OmsOrderConsumeFailure"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO oms_order_consume_failure
+            (event_id, order_id, raw_payload, reason, retry_count, handle_status, created_at)
+        VALUES
+            (#{eventId}, #{orderId}, #{rawPayload}, #{reason}, #{retryCount}, 0, #{createdAt})
+    </insert>
+
+    <select id="countConsumeFailures" resultType="java.lang.Integer">
+        SELECT COUNT(*) FROM oms_order_consume_failure WHERE event_id = #{eventId}
+    </select>
+
+    <select id="selectMetrics" resultType="map">
+        SELECT
+            (SELECT COUNT(*) FROM oms_order_message WHERE status = 'PENDING') AS pending_messages,
+            (SELECT COUNT(*) FROM oms_order_message WHERE status = 'SENDING') AS sending_messages,
+            (SELECT COUNT(*) FROM oms_order_message WHERE status = 'SENT')    AS sent_messages,
+            (SELECT COUNT(*) FROM oms_order_message WHERE status = 'FAILED')  AS failed_messages,
+            (SELECT COALESCE(TIMESTAMPDIFF(SECOND, MIN(created_at), NOW()), 0)
+               FROM oms_order_message WHERE status IN ('PENDING', 'FAILED')) AS oldest_pending_seconds,
+            (SELECT COUNT(*) FROM oms_order_consume_failure WHERE handle_status = 0) AS consume_failures,
+            (SELECT COUNT(*) FROM oms_order
+              WHERE status = 0 AND delete_status = 0
+                AND expire_time IS NOT NULL AND expire_time &lt;= NOW())      AS expired_uncancelled,
+            (SELECT COUNT(*) FROM oms_order
+              WHERE status = 0 AND delete_status = 0 AND expire_time IS NULL) AS pending_without_expire_time,
+            (SELECT COUNT(*) FROM oms_order_expire_backfill_exception WHERE handle_status = 0) AS backfill_exceptions
+    </select>
+
+</mapper>

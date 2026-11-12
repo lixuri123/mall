@@ -156,4 +156,33 @@
         ORDER BY id
     </select>
 
+    <!-- =====================================================================
+         B 阶段：固定到期时间 + 超时兜底扫描
+         ===================================================================== -->
+
+    <!-- 下单事务内写入 expire_time。条件保证不会覆盖已经存在的到期时间。 -->
+    <update id="updateOrderExpireTime">
+        UPDATE oms_order
+        SET expire_time = #{expireTime}
+        WHERE id = #{orderId}
+          AND expire_time IS NULL
+    </update>
+
+    <select id="selectOrderExpireTime" resultType="java.util.Date">
+        SELECT expire_time FROM oms_order WHERE id = #{orderId}
+    </select>
+
+    <!-- keyset 分页：按 id 升序推进游标，失败订单不会让扫描反复卡在同一批。 -->
+    <select id="listExpiredPendingOrderIds" resultType="java.lang.Long">
+        SELECT o.id
+        FROM oms_order o
+        WHERE o.status = 0
+          AND o.delete_status = 0
+          AND o.expire_time IS NOT NULL
+          AND o.expire_time &lt;= NOW()
+          AND o.id &gt; #{afterId}
+        ORDER BY o.id
+        LIMIT #{limit}
+    </select>
+
 </mapper>

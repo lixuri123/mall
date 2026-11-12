@@ -34,7 +34,7 @@ public class OmsPortalOrderDebugController {
         return CommonResult.success(count, "支付成功");
     }
 
-    @Operation(summary = "[调试] 立即发送一条延迟取消消息")
+    @Operation(summary = "[调试] 为历史订单补齐本地超时取消消息（不再直接发 MQ）")
     @RequestMapping(value = "/cancelOrder", method = RequestMethod.POST)
     public CommonResult cancelOrder(Long orderId) {
         portalOrderService.sendDelayMessageCancelOrder(orderId);

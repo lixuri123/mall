@@ -79,9 +79,33 @@ mall:
   order:
     # 仅隔离测试环境可开启；开启后才有 /order/paySuccess、/order/cancelOrder 调试入口
     debug-endpoints-enabled: false
-    # 超时扫描兜底：消息丢失时仍能被取消并释放锁定库存
+    # 超时扫描兜底：消息发布后仍未完成取消时，按固定到期时间逐单补偿
     timeout-scan:
       enabled: true
       initial-delay-ms: 30000
       interval-ms: 60000
+    # B 阶段：本地消息表 + 到期投递 + Publisher Confirm/Return + 受控消费重试
+    outbox:
+      exchange: mall.order.direct
+      routing-key: mall.order.cancel
+      admin-enabled: false
+      dispatch:
+        enabled: true
+        initial-delay-ms: 3000
+        interval-ms: 5000
+        batch-size: 100
+        lease-seconds: 30
+        confirm-timeout-ms: 5000
+        max-retry: 5
+        retry-base-seconds: 5
+        retry-max-seconds: 300
+      consume:
+        max-retry: 3
+        # 固定 TTL（所有重试消息延迟相同，无队头阻塞）；测试也使用同一数值，避免队列重声明冲突
+        retry-ttl-ms: 1000
+      metrics:
+        enabled: true
+        interval-ms: 60000
+        pending-warn-threshold: 100
+        oldest-pending-warn-seconds: 300
 

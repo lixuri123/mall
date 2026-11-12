@@ -3,6 +3,7 @@ package com.macro.mall.portal.dao;
 import com.macro.mall.portal.domain.OmsOrderPayAnomaly;
 import org.apache.ibatis.annotations.Param;
 
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
@@ -66,4 +67,24 @@ public interface PortalOrderDao {
 
     /** 启动时历史库存数据预检：返回 NULL / 负数 / 超锁定 的 SKU。 */
     List<Map<String, Object>> listStockAnomalies();
+
+    // -------------------------------------------------------------------------
+    // B 阶段：固定到期时间与超时兜底扫描
+    // -------------------------------------------------------------------------
+
+    /**
+     * 下单事务内写入固定到期时间。MBG 生成的 OmsOrder 不含该列，
+     * 因此用自定义 DAO 在 insert 之后追加一次条件 UPDATE，仍在同一事务里。
+     */
+    int updateOrderExpireTime(@Param("orderId") Long orderId, @Param("expireTime") Date expireTime);
+
+    /** 系统取消时读取数据库中的固定到期时间；NULL 表示历史数据尚未回填。 */
+    Date selectOrderExpireTime(@Param("orderId") Long orderId);
+
+    /**
+     * 超时兜底扫描：keyset 分页取「已到期但仍待支付」的订单 ID。
+     * 命中 idx_order_expire_scan (status, delete_status, id, expire_time)。
+     */
+    List<Long> listExpiredPendingOrderIds(@Param("afterId") Long afterId,
+                                          @Param("limit") Integer limit);
 }

@@ -209,11 +209,30 @@ mall
 
 ## 本地改造记录
 
-本工作区在源码基础上完成了「订单状态与库存一致性改造」（A 阶段）：MySQL 条件更新防超卖、
-订单状态条件流转、支付/取消幂等、事务边界与超时补偿，并补齐真实 MySQL 集成测试。
-改动清单、边界说明、基线与实测数据见 [document/order-consistency/README.md](./document/order-consistency/README.md)，
-已有库升级前请先执行 [库存数据预检](./document/sql/mall_a_precheck.sql) 与
-[迁移脚本](./document/sql/mall_a_migration.sql)。
+本工作区在源码基础上完成了两阶段订单链路改造，**代码与测试均已实际跑通，尚未提交 Git**。
+
+- **A：订单状态与库存一致性改造** — MySQL 条件更新防超卖、订单状态条件流转、
+  支付/取消幂等、事务边界与超时补偿，并补齐真实 MySQL 集成测试。
+  说明 [document/order-consistency/README.md](./document/order-consistency/README.md)、
+  报告 [TEST_REPORT.md](./document/order-consistency/TEST_REPORT.md)。
+- **B：超时订单取消的消息可靠性** — 固定 `oms_order.expire_time` + 本地消息表（Outbox），
+  下单事务内写 `PENDING` 消息、到期租约派发、Publisher Confirm / mandatory Return、
+  手动 ACK / 固定 TTL 重试 / 死信队列、双层定时兜底与指标告警；
+  在 `mall-local` 容器的真实 MySQL 8.4.7 + RabbitMQ 4.2.9 上完成故障注入测试。
+  说明 [document/order-consistency/B_README.md](./document/order-consistency/B_README.md)、
+  报告 [B_TEST_REPORT.md](./document/order-consistency/B_TEST_REPORT.md)、
+  原始输出 [results/](./document/order-consistency/results/)。
+
+全量结果：56 个集成/单元测试 0 失败 / 0 错误 / 0 跳过，8 个模块编译通过。
+
+已有库升级顺序（**先备份，预检只读，人工确认后再迁移**）：
+
+1. [A 库存数据预检](./document/sql/mall_a_precheck.sql) → [A 迁移](./document/sql/mall_a_migration.sql)
+2. [B 预检](./document/sql/mall_b_precheck.sql) → [B 迁移](./document/sql/mall_b_migration.sql)
+
+新环境直接导入 [document/sql/mall.sql](./document/sql/mall.sql)（已内置 A+B 全部结构）。
+本地中间件用 `docker compose -p mall-local -f document/docker/docker-compose-local.yml up -d`，
+MySQL 必须保持 `+08:00` 时区，说明见 [document/docker/LOCAL.md](./document/docker/LOCAL.md)。
 
 ## 许可证
 

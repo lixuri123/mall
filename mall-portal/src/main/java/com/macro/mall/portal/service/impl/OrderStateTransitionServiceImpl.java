@@ -2,7 +2,6 @@ package com.macro.mall.portal.service.impl;
 
 import com.macro.mall.mapper.OmsOrderItemMapper;
 import com.macro.mall.mapper.OmsOrderMapper;
-import com.macro.mall.mapper.OmsOrderSettingMapper;
 import com.macro.mall.model.OmsOrder;
 import com.macro.mall.model.OmsOrderExample;
 import com.macro.mall.model.OmsOrderItem;
@@ -24,6 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.Date;
 import java.util.List;
 
 /**
@@ -52,8 +52,6 @@ public class OrderStateTransitionServiceImpl implements OrderStateTransitionServ
     private OmsOrderMapper orderMapper;
     @Autowired
     private OmsOrderItemMapper orderItemMapper;
-    @Autowired
-    private OmsOrderSettingMapper orderSettingMapper;
     @Autowired
     private PortalOrderDao portalOrderDao;
     @Autowired
@@ -130,14 +128,16 @@ public class OrderStateTransitionServiceImpl implements OrderStateTransitionServ
                 return CancelResult.rejected("不能取消其他用户的订单");
             }
         } else {
-            int overtimeMinutes = resolveOvertimeMinutes(command);
-            if (overtimeMinutes <= 0) {
-                return CancelResult.rejected("订单超时配置异常，跳过系统取消");
+            // B 阶段：系统取消一律以数据库中固定的 expire_time 为准。
+            // 消息里的 dueTime 只用于追踪；不用「当前配置 + create_time」重算，
+            // 否则后台改了超时配置就会悄悄改变已有订单的到期时间。
+            Date expireTime = portalOrderDao.selectOrderExpireTime(order.getId());
+            if (expireTime == null) {
+                // 历史订单未完成回填：列入待处理，不猜测到期时间，也不自动关闭。
+                log.error("系统取消被拒绝：订单缺少固定到期时间，需先完成历史数据回填。orderId={}", order.getId());
+                return CancelResult.rejected("订单缺少固定到期时间，需先完成历史数据回填");
             }
-            if (order.getCreateTime() == null) {
-                return CancelResult.rejected("订单创建时间缺失，跳过系统取消");
-            }
-            if (order.getCreateTime().getTime() + overtimeMinutes * 60_000L > System.currentTimeMillis()) {
+            if (expireTime.getTime() > System.currentTimeMillis()) {
                 return CancelResult.notTimedOut();
             }
         }
@@ -252,12 +252,4 @@ public class OrderStateTransitionServiceImpl implements OrderStateTransitionServ
         return status != null && status >= STATUS_TO_BE_DELIVERED && status <= 3;
     }
 
-    private int resolveOvertimeMinutes(CancelCommand command) {
-        if (command.getOvertimeMinutes() != null && command.getOvertimeMinutes() > 0) {
-            return command.getOvertimeMinutes();
-        }
-        var setting = orderSettingMapper.selectByPrimaryKey(1L);
-        return setting == null || setting.getNormalOrderOvertime() == null
-                ? 0 : setting.getNormalOrderOvertime();
-    }
 }
